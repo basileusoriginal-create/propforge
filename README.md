@@ -51,6 +51,24 @@ PyMateria; der Windows-Job deckt zusätzlich den NATIVE-Export ab.
 Damit ist die Pipeline bei jedem Push verifiziert, ohne dass jemand etwas
 anklicken muss.
 
+Die Blender-Installation folgt dem Muster aus Sollumz' eigener CI —
+`blender-downloader` aus dem **Sollumz-Fork**, weil blender.org den
+Standard-Python-User-Agent blockt. Die Abhängigkeiten installiert Sollumz'
+eigene `install_dependencies()` mit gepinnter Version und Hash-Prüfung.
+
+### Loslegen
+
+Das Repo enthält bereits einen Initial-Commit. Zum Starten:
+
+```bash
+git remote add origin git@github.com:<dein-user>/propforge.git
+git push -u origin main
+```
+
+Danach unter *Actions* den Lauf öffnen. Der Job **Pipeline (Linux, CWXML)**
+zeigt das vollständige Blender-Log; das gebaute Asset liegt als Artefakt
+`propforge-build-linux` daran.
+
 ## Was bewusst Handarbeit bleibt
 
 - **UV-Layout.** Das Skript legt notfalls ein Smart-UV-Projekt an, damit der
