@@ -89,10 +89,16 @@ def reset_scene() -> None:
 
 
 def select_only(obj: bpy.types.Object) -> None:
-    # select_all braucht Objekte im View Layer, sonst scheitert der poll().
-    # Direkt ueber die Objektliste zu gehen ist robuster als der Operator.
-    for other in bpy.context.view_layer.objects:
-        other.select_set(False)
+    """Selektiert genau ein Objekt und macht es aktiv.
+
+    Ueber `selected_objects` statt `view_layer.objects`: letzteres kann nach
+    einem `bpy.data.objects.remove()` verwaiste Eintraege enthalten, die beim
+    Iterieren als None auftauchen. `selected_objects` ist eine Momentaufnahme
+    und damit die deutlich kleinere und stabilere Liste.
+    """
+    for other in tuple(bpy.context.selected_objects):
+        if other is not None:
+            other.select_set(False)
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
 
@@ -143,9 +149,14 @@ def cleanup_mesh(obj: bpy.types.Object) -> None:
 
 
 def tri_count(obj: bpy.types.Object) -> int:
-    return len(obj.data.loop_triangles) or sum(
-        len(p.vertices) - 2 for p in obj.data.polygons
-    )
+    """Zaehlt Dreiecke.
+
+    `loop_triangles` ist leer, solange es nicht berechnet wurde - ohne den
+    Aufruf haette die Budget-Pruefung stumm immer 0 gemeldet und nie gegriffen.
+    """
+    mesh = obj.data
+    mesh.calc_loop_triangles()
+    return len(mesh.loop_triangles)
 
 
 def ensure_uvs(obj: bpy.types.Object) -> bool:
@@ -168,44 +179,62 @@ def ensure_uvs(obj: bpy.types.Object) -> bool:
 
 # --- LODs -------------------------------------------------------------------
 
+def _bake_decimate(obj: bpy.types.Object, ratio: float, name: str) -> bpy.types.Mesh:
+    """Backt einen Decimate-Modifier in einen neuen Mesh-Datenblock.
+
+    Bewusst ohne Operatoren: `modifier_apply` braucht die richtige Selektion,
+    den richtigen Modus und einen gueltigen Kontext, und jeder dieser drei
+    Punkte ist im Hintergrundmodus eine Fehlerquelle. Der Weg ueber den
+    Depsgraph wertet den Modifier direkt aus und ist vom Kontext unabhaengig.
+    """
+    tmp = obj.copy()
+    tmp.data = obj.data.copy()
+    bpy.context.collection.objects.link(tmp)
+
+    try:
+        mod = tmp.modifiers.new(name="lod_decimate", type="DECIMATE")
+        mod.decimate_type = "COLLAPSE"
+        mod.ratio = ratio
+        # Symmetrie aus: sie kann bei asymmetrischen Props die Silhouette kippen.
+        mod.use_symmetry = False
+
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = tmp.evaluated_get(depsgraph)
+        mesh = bpy.data.meshes.new_from_object(
+            evaluated, preserve_all_data_layers=True, depsgraph=depsgraph
+        )
+        mesh.name = name
+    finally:
+        # Hilfsobjekt immer entfernen, auch wenn die Auswertung scheitert -
+        # sonst landet es in der exportierten Hierarchie.
+        bpy.data.objects.remove(tmp, do_unlink=True)
+
+    return mesh
+
+
 def decimate_to_ratio(obj: bpy.types.Object, ratio: float, name: str) -> bpy.types.Mesh:
     """Erzeugt eine reduzierte Kopie des Meshes als eigenen Datenblock."""
     if ratio >= 1.0:
         mesh = obj.data.copy()
         mesh.name = name
         return mesh
-
-    tmp = obj.copy()
-    tmp.data = obj.data.copy()
-    bpy.context.collection.objects.link(tmp)
-
-    mod = tmp.modifiers.new(name="lod_decimate", type="DECIMATE")
-    mod.decimate_type = "COLLAPSE"
-    mod.ratio = ratio
-    # Symmetrie erhalten, damit reduzierte LODs nicht einseitig einfallen.
-    mod.use_symmetry = False
-
-    select_only(tmp)
-    bpy.ops.object.modifier_apply(modifier=mod.name)
-
-    mesh = tmp.data
-    mesh.name = name
-    # Objekt loesen, Mesh-Datenblock behalten.
-    bpy.data.objects.remove(tmp, do_unlink=True)
-    return mesh
+    return _bake_decimate(obj, ratio, name)
 
 
 def clamp_to_budget(obj: bpy.types.Object, max_tris: int) -> None:
+    """Reduziert LOD0, falls das generierte Mesh ueber dem Budget liegt."""
     current = tri_count(obj)
     if current <= max_tris:
         return
+
     ratio = max_tris / current
     log(f"LOD0 hat {current} Tris, Budget ist {max_tris} - reduziere auf Faktor {ratio:.3f}.")
-    select_only(obj)
-    mod = obj.modifiers.new(name="budget_decimate", type="DECIMATE")
-    mod.decimate_type = "COLLAPSE"
-    mod.ratio = ratio
-    bpy.ops.object.modifier_apply(modifier=mod.name)
+
+    reduced = _bake_decimate(obj, ratio, f"{obj.data.name}_budget")
+    old = obj.data
+    obj.data = reduced
+    if old.users == 0:
+        bpy.data.meshes.remove(old)
 
 
 # --- Material ---------------------------------------------------------------
