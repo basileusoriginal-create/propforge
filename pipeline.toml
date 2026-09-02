@@ -1,0 +1,72 @@
+## PropForge - Beispielkonfiguration
+##
+## Ein Prop pro [[prop]]-Block. Alles unter [defaults] gilt fuer alle Props
+## und kann pro Prop ueberschrieben werden.
+
+[pipeline]
+resource_name = "pf_props_industrial"
+author = "Nick"
+workdir = "out"
+
+# NATIVE schreibt direkt Binaerdateien (.ydr) und benoetigt PyMateria (Windows).
+# CWXML schreibt CodeWalker-XML, das plattformunabhaengig funktioniert und
+# anschliessend mit CodeWalker konvertiert wird.
+export_format = "NATIVE"
+
+# GEN8 = klassisches GTA V (FiveM), GEN9 = Enhanced-Release.
+export_version = "GEN8"
+
+
+[defaults]
+shader = "normal_spec.sps"
+texture_size = 1024
+max_tris = 10000
+flip_normal_green = true
+
+[defaults.lods.ratios]
+high = 1.0
+medium = 0.5
+low = 0.22
+verylow = 0.08
+
+[defaults.lods.distances]
+high = 60.0
+medium = 120.0
+low = 250.0
+verylow = 500.0
+
+[defaults.collision]
+enabled = true
+kind = "bvh"
+flag_preset = "Default"
+source_lod = "low"
+
+
+[[prop]]
+name = "pf_pallet_stack"
+mesh = "assets/pallet_stack.glb"
+
+[prop.textures]
+diffuse = "assets/pallet_stack_albedo.png"
+normal = "assets/pallet_stack_normal.png"
+roughness = "assets/pallet_stack_roughness.png"
+metallic = "assets/pallet_stack_metallic.png"
+
+
+[[prop]]
+name = "pf_oil_drum"
+mesh = "assets/oil_drum.glb"
+texture_size = 512
+max_tris = 4000
+
+[prop.textures]
+diffuse = "assets/oil_drum_albedo.png"
+normal = "assets/oil_drum_normal.png"
+roughness = "assets/oil_drum_roughness.png"
+
+# Ein Fass ist rund, aber Kollision braucht keine Rundung -
+# die konvexe Huelle spart deutlich Rechenzeit.
+[prop.collision]
+enabled = true
+kind = "hull"
+source_lod = "verylow"

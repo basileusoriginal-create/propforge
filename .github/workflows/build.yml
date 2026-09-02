@@ -1,0 +1,198 @@
+name: build
+
+# Die eigentliche Vollautomatisierung: jeder Push installiert Blender und
+# Sollumz, baut ein Testasset durch die komplette Kette und prueft das
+# Ergebnis maschinell. Kein Mensch muss dafuer etwas anklicken.
+#
+# Die Blender-Installation folgt dem Muster aus Sollumz' eigener CI:
+# blender-downloader aus dem Sollumz-Fork (blender.org blockt den
+# Standard-Python-User-Agent) plus pytest-blender, um an Blenders internes
+# Python zu kommen.
+#
+# Der Linux-Job exportiert CWXML - das laeuft ohne PyMateria und ist als XML
+# maschinell pruefbar. Der Windows-Job deckt zusaetzlich den NATIVE-Export ab.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  # Von Sollumz' eigener CI-Matrix abgedeckte LTS-Version.
+  BLENDER_VERSION: "4.5.11"
+
+jobs:
+  unit:
+    name: Unit-Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install -r requirements.txt
+      - run: pytest tests/ -v
+
+  pipeline:
+    name: Pipeline (Linux, CWXML)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Blender cachen
+        uses: actions/cache@v4
+        id: cache-blender
+        with:
+          path: |
+            _blender/blender-*
+            _blender-executable-path.txt
+          key: ${{ runner.os }}-blender-${{ env.BLENDER_VERSION }}
+
+      - name: Blender herunterladen
+        if: steps.cache-blender.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          # Sollumz-Fork: setzt einen eigenen User-Agent, weil blender.org den
+          # Standard-Python-User-Agent blockt.
+          pip install git+https://github.com/Sollumz/blender-downloader.git
+          mkdir -p _blender
+          blender-downloader "$BLENDER_VERSION" -d _blender --extract \
+            --remove-compressed --print-blender-executable --quiet \
+            > _blender-executable-path.txt
+          cat _blender-executable-path.txt
+
+      - name: Blender-Python ermitteln
+        run: |
+          set -euo pipefail
+          pip install pytest-blender==3.0.7
+          BLENDER=$(tr -d '\r\n' < _blender-executable-path.txt)
+          echo "BLENDER=$BLENDER" >> "$GITHUB_ENV"
+          "$BLENDER" --version
+
+      - name: Sollumz installieren
+        run: |
+          set -euo pipefail
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git _sollumz
+          series=$(echo "$BLENDER_VERSION" | cut -d. -f1,2)
+          addons="$HOME/.config/blender/$series/scripts/addons"
+          mkdir -p "$addons"
+          ln -s "$PWD/_sollumz" "$addons/Sollumz"
+          "$BLENDER" --background --python-expr \
+            "import bpy; bpy.ops.preferences.addon_enable(module='Sollumz'); bpy.ops.wm.save_userpref()"
+
+      - name: Sollumz-Abhaengigkeiten installieren (szio)
+        run: |
+          set -euo pipefail
+          # Sollumz bringt die Installation selbst mit, inklusive gepinnter
+          # Version und Hash-Pruefung. online_access_override umgeht, dass
+          # Blender im Hintergrundmodus keinen Online-Zugriff meldet.
+          "$BLENDER" --background --python-expr "
+          from Sollumz import dependencies
+          ok = dependencies.install_dependencies(online_access_override=True)
+          print('DEPS_INSTALLED' if ok else 'DEPS_FAILED')
+          "
+
+      - name: szio-Verfuegbarkeit pruefen
+        run: |
+          set -euo pipefail
+          # Frischer Blender-Prozess: die Abhaengigkeiten werden erst beim
+          # Start in den sys.path gemountet.
+          "$BLENDER" --background --python-expr "
+          import sys
+          try:
+              import szio
+              print('SZIO_OK')
+          except ImportError as exc:
+              print('SZIO_MISSING:', exc); sys.exit(1)
+          "
+
+      - name: Umgebung pruefen
+        run: |
+          pip install -r requirements.txt
+          python -m propforge.cli doctor --blender "$BLENDER"
+
+      - name: Testasset erzeugen
+        run: python tools/make_testasset.py --out ci/assets
+
+      - name: Pipeline durchlaufen
+        run: |
+          set -euo pipefail
+          python -m propforge.cli validate ci/pipeline.ci.toml
+          python -m propforge.cli textures ci/pipeline.ci.toml
+          python -m propforge.cli build    ci/pipeline.ci.toml --blender "$BLENDER"
+
+      - name: Export maschinell verifizieren
+        run: python -m propforge.cli verify ci/pipeline.ci.toml
+
+      - name: Resource packen
+        run: python -m propforge.cli pack ci/pipeline.ci.toml
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: propforge-build-linux
+          path: |
+            ci/out/build/**
+            ci/out/resources/**
+          if-no-files-found: warn
+
+  pipeline-windows:
+    name: Pipeline (Windows, NATIVE)
+    runs-on: windows-latest
+    # Der NATIVE-Pfad braucht PyMateria und ist damit anfaelliger als CWXML.
+    # Er darf fehlschlagen, ohne den ganzen Lauf rot zu faerben.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Blender herunterladen
+        run: |
+          pip install git+https://github.com/Sollumz/blender-downloader.git
+          mkdir _blender
+          blender-downloader $env:BLENDER_VERSION -d _blender --extract --remove-compressed --print-blender-executable --quiet | Out-File -FilePath _blender-executable-path.txt -Encoding ascii
+          $blender = (Get-Content _blender-executable-path.txt).Trim()
+          echo "BLENDER=$blender" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          & $blender --version
+
+      - name: Sollumz installieren
+        run: |
+          git clone --depth 1 https://github.com/Sollumz/Sollumz.git _sollumz
+          $series = $env:BLENDER_VERSION.Split('.')[0..1] -join '.'
+          $addons = "$env:APPDATA\Blender Foundation\Blender\$series\scripts\addons"
+          New-Item -ItemType Directory -Force -Path $addons | Out-Null
+          Copy-Item -Recurse "$PWD\_sollumz" "$addons\Sollumz"
+          & $env:BLENDER --background --python-expr "import bpy; bpy.ops.preferences.addon_enable(module='Sollumz'); bpy.ops.wm.save_userpref()"
+
+      - name: Sollumz-Abhaengigkeiten installieren (szio + PyMateria)
+        run: |
+          & $env:BLENDER --background --python-expr "from Sollumz import dependencies; print('OK' if dependencies.install_dependencies(online_access_override=True, optional_dependencies_to_install={'pymateria'}) else 'FAILED')"
+
+      - name: texconv installieren
+        run: |
+          $rel = Invoke-RestMethod https://api.github.com/repos/microsoft/DirectXTex/releases/latest
+          $asset = $rel.assets | Where-Object { $_.name -eq "texconv.exe" } | Select-Object -First 1
+          New-Item -ItemType Directory -Force -Path C:\tools | Out-Null
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile C:\tools\texconv.exe
+          echo "C:\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+
+      - name: Pipeline durchlaufen
+        run: |
+          pip install -r requirements.txt
+          python tools/make_testasset.py --out ci/assets
+          python -m propforge.cli doctor --blender $env:BLENDER
+          python -m propforge.cli run ci/pipeline.ci.native.toml --blender $env:BLENDER
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: propforge-build-windows
+          path: ci/out/**
+          if-no-files-found: warn

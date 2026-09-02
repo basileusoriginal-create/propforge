@@ -1,0 +1,6 @@
+out/
+ci/out/
+ci/assets/
+assets/
+__pycache__/
+*.pyc
