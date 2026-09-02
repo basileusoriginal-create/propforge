@@ -263,11 +263,14 @@ def build_material(job: dict, mesh_obj: bpy.types.Object) -> bpy.types.Material:
             log(f"Shader '{shader_name}' hat keinen {sampler} - '{dds.name}' wird uebersprungen.")
             continue
         node.image = bpy.data.images.load(str(dds), check_existing=True)
-        node.sollumz_texture_name = dds.stem
+        # sollumz_texture_name NICHT setzen: die Property hat nur einen Getter.
+        # Sollumz leitet den Namen aus dem Dateipfad ab (Basisname ohne Endung,
+        # kleingeschrieben). Es reicht also, die DDS unter dem gewuenschten
+        # Namen zu laden - was die Texturstufe ohnehin tut.
         # Eingebettet: die Textur wandert in die .ydr statt in eine separate .ytd.
-        # Fuer einzelne Props ist das der einfachere Weg.
         node.texture_properties.embedded = True
         attached += 1
+        log(f"  {sampler:<15} <- {dds.name} (Texturname: {node.sollumz_texture_name})")
 
     if attached == 0:
         log(f"Warnung: keine Textur an '{shader_name}' gebunden - liegen die DDS in {texture_dir}?")
@@ -486,28 +489,52 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--job", required=True, help="Pfad zur Job-JSON (ein Prop oder Liste)")
     parser.add_argument("--format", default="NATIVE", choices=["NATIVE", "CWXML"])
     parser.add_argument("--version", default="GEN8", choices=["GEN8", "GEN9"])
+    parser.add_argument("--result", help="Pfad fuer den Ergebnisbericht (JSON)")
     args = parser.parse_args(argv)
 
     payload = json.loads(Path(args.job).read_text(encoding="utf-8"))
     jobs = payload if isinstance(payload, list) else [payload]
 
-    failed = 0
+    succeeded: list[str] = []
+    failures: list[dict] = []
+
     for job in jobs:
+        name = job.get("name", "?")
         try:
             build(job, args.format, args.version)
-        except Exception:  # noqa: BLE001 - ein kaputter Prop darf den Batch nicht stoppen
+            succeeded.append(name)
+        except Exception as exc:  # noqa: BLE001 - ein kaputter Prop darf den Batch nicht stoppen
             import traceback
 
-            failed += 1
+            trace = traceback.format_exc()
             # Vollstaendiger Traceback, nicht nur str(exc): bei Blender-Operatoren
             # steht die eigentliche Ursache fast immer in der Aufrufkette, nicht
             # in der Fehlermeldung selbst.
-            log(f"FEHLER bei '{job.get('name', '?')}':")
-            for line in traceback.format_exc().splitlines():
+            log(f"FEHLER bei '{name}':")
+            for line in trace.splitlines():
                 log(f"  {line}")
+            failures.append({"name": name, "error": str(exc), "traceback": trace})
 
-    log(f"Fertig: {len(jobs) - failed}/{len(jobs)} Props gebaut.")
-    return 1 if failed else 0
+    log(f"Fertig: {len(succeeded)}/{len(jobs)} Props gebaut.")
+
+    # Ergebnisbericht schreiben. Der Exit-Code allein reicht nicht: Blender
+    # gibt ihn im Hintergrundmodus nicht zuverlaessig weiter, wodurch ein
+    # fehlgeschlagener Build als Erfolg durchgeht und die naechste Stufe
+    # auf nicht existierenden Dateien arbeitet. Genau das ist passiert.
+    if args.result:
+        result_path = Path(args.result)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(
+            json.dumps(
+                {"total": len(jobs), "succeeded": succeeded, "failed": failures},
+                indent=2,
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        log(f"Ergebnisbericht: {result_path}")
+
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

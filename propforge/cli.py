@@ -96,15 +96,43 @@ def cmd_build(args: argparse.Namespace) -> int:
     # Sollumz, und haengt dessen site-packages (szio, PyMateria) nicht ein.
     # Der Build wuerde dann mit "Sollumz nicht gefunden" scheitern, obwohl
     # alles korrekt installiert ist.
+    result_file = config.workdir / "build_result.json"
+    if result_file.exists():
+        result_file.unlink()
+
     cmd = [
         blender, "--background",
         "--python", str(script), "--",
         "--job", str(jobs_file),
         "--format", config.export_format,
         "--version", config.export_version,
+        "--result", str(result_file),
     ]
     print("$ " + " ".join(cmd))
-    return subprocess.run(cmd).returncode
+    returncode = subprocess.run(cmd).returncode
+
+    # Auf den Exit-Code allein ist kein Verlass: Blender gibt ihn im
+    # Hintergrundmodus nicht zuverlaessig weiter. Ein fehlgeschlagener Build
+    # kam dadurch als Erfolg zurueck und die naechste Stufe arbeitete auf
+    # Dateien, die es nie gab. Der Ergebnisbericht ist die belastbare Quelle.
+    if not result_file.exists():
+        print(
+            f"\nBlender hat keinen Ergebnisbericht geschrieben ({result_file}).\n"
+            "Das heisst, das Skript ist vor dem Ende abgebrochen - der Grund steht "
+            "weiter oben in der Blender-Ausgabe.",
+            file=sys.stderr,
+        )
+        return returncode or 1
+
+    result = json.loads(result_file.read_text(encoding="utf-8"))
+    failed = result.get("failed", [])
+    succeeded = result.get("succeeded", [])
+
+    print(f"\nGebaut: {len(succeeded)}/{result.get('total', 0)}")
+    for failure in failed:
+        print(f"  FEHLGESCHLAGEN {failure['name']}: {failure['error']}", file=sys.stderr)
+
+    return 1 if failed else returncode
 
 
 def cmd_pack(args: argparse.Namespace) -> int:
