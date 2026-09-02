@@ -78,11 +78,21 @@ def log(msg: str) -> None:
 # --- Szene ------------------------------------------------------------------
 
 def reset_scene() -> None:
-    bpy.ops.wm.read_factory_settings(use_empty=True)
+    """Leert die Szene, ohne die Preferences anzufassen.
+
+    Nicht read_factory_settings verwenden: das setzt auch die Einstellungen
+    zurueck und kann dabei die aktivierten Add-ons mitnehmen - also Sollumz
+    selbst. Sollumz' eigene Tests benutzen read_homefile, und das ist auch
+    hier der richtige Aufruf.
+    """
+    bpy.ops.wm.read_homefile(use_empty=True)
 
 
 def select_only(obj: bpy.types.Object) -> None:
-    bpy.ops.object.select_all(action="DESELECT")
+    # select_all braucht Objekte im View Layer, sonst scheitert der poll().
+    # Direkt ueber die Objektliste zu gehen ist robuster als der Operator.
+    for other in bpy.context.view_layer.objects:
+        other.select_set(False)
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
 

@@ -85,7 +85,8 @@ jobs:
       - name: Sollumz-Abhaengigkeiten installieren (szio)
         run: |
           set -euo pipefail
-          "$BLENDER" --background --python ci/install_deps.py
+          set -o pipefail
+          "$BLENDER" --background --python ci/install_deps.py 2>&1 | tee -a ci-build.log
 
       - name: szio-Verfuegbarkeit pruefen
         run: |
@@ -103,8 +104,9 @@ jobs:
 
       - name: Umgebung pruefen
         run: |
+          set -o pipefail
           pip install -r requirements.txt
-          python -m propforge.cli doctor --blender "$BLENDER"
+          python -m propforge.cli doctor --blender "$BLENDER" 2>&1 | tee -a ci-build.log
 
       - name: Testasset erzeugen
         run: python tools/make_testasset.py --out ci/assets
@@ -112,15 +114,38 @@ jobs:
       - name: Pipeline durchlaufen
         run: |
           set -euo pipefail
-          python -m propforge.cli validate ci/pipeline.ci.toml
-          python -m propforge.cli textures ci/pipeline.ci.toml
-          python -m propforge.cli build    ci/pipeline.ci.toml --blender "$BLENDER"
+          set -o pipefail
+          python -m propforge.cli validate ci/pipeline.ci.toml 2>&1 | tee -a ci-build.log
+          python -m propforge.cli textures ci/pipeline.ci.toml 2>&1 | tee -a ci-build.log
+          python -m propforge.cli build    ci/pipeline.ci.toml --blender "$BLENDER" 2>&1 | tee -a ci-build.log
 
       - name: Export maschinell verifizieren
-        run: python -m propforge.cli verify ci/pipeline.ci.toml
+        run: |
+          set -o pipefail
+          python -m propforge.cli verify ci/pipeline.ci.toml 2>&1 | tee -a ci-build.log
 
       - name: Resource packen
         run: python -m propforge.cli pack ci/pipeline.ci.toml
+
+      # Die Zusammenfassung ist auf der Run-Seite ohne Login lesbar, die
+      # Schritt-Logs nicht. Damit ist ein Fehlschlag von aussen diagnostizierbar,
+      # ohne dass jemand Screenshots machen muss.
+      - name: Fehlerbericht in die Zusammenfassung schreiben
+        if: failure()
+        run: |
+          {
+            echo "## Pipeline (Linux, CWXML) fehlgeschlagen"
+            echo
+            echo "### Letzte 200 Zeilen"
+            echo '```'
+            tail -n 200 ci-build.log 2>/dev/null || echo "(kein Log geschrieben)"
+            echo '```'
+            echo
+            echo "### Erzeugte Dateien"
+            echo '```'
+            find ci/out -type f 2>/dev/null | head -50 || echo "(nichts)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -178,8 +203,17 @@ jobs:
         run: |
           pip install -r requirements.txt
           python tools/make_testasset.py --out ci/assets
-          python -m propforge.cli doctor --blender $env:BLENDER
-          python -m propforge.cli run ci/pipeline.ci.native.toml --blender $env:BLENDER
+          python -m propforge.cli doctor --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log
+          python -m propforge.cli run ci/pipeline.ci.native.toml --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Fehlerbericht in die Zusammenfassung schreiben
+        if: failure()
+        run: |
+          "## Pipeline (Windows, NATIVE) fehlgeschlagen" | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          Get-Content ci-build.log -Tail 200 -ErrorAction SilentlyContinue | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          '```' | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
 
       - uses: actions/upload-artifact@v4
         if: always()
