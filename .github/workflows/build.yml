@@ -5,9 +5,8 @@ name: build
 # Ergebnis maschinell. Kein Mensch muss dafuer etwas anklicken.
 #
 # Die Blender-Installation folgt dem Muster aus Sollumz' eigener CI:
-# blender-downloader aus dem Sollumz-Fork (blender.org blockt den
-# Standard-Python-User-Agent) plus pytest-blender, um an Blenders internes
-# Python zu kommen.
+# blender-downloader aus dem Sollumz-Fork, weil blender.org den
+# Standard-Python-User-Agent blockt.
 #
 # Der Linux-Job exportiert CWXML - das laeuft ohne PyMateria und ist als XML
 # maschinell pruefbar. Der Windows-Job deckt zusaetzlich den NATIVE-Export ab.
@@ -65,10 +64,9 @@ jobs:
             > _blender-executable-path.txt
           cat _blender-executable-path.txt
 
-      - name: Blender-Python ermitteln
+      - name: Blender-Pfad merken
         run: |
           set -euo pipefail
-          pip install pytest-blender==3.0.7
           BLENDER=$(tr -d '\r\n' < _blender-executable-path.txt)
           echo "BLENDER=$BLENDER" >> "$GITHUB_ENV"
           "$BLENDER" --version
@@ -87,14 +85,7 @@ jobs:
       - name: Sollumz-Abhaengigkeiten installieren (szio)
         run: |
           set -euo pipefail
-          # Sollumz bringt die Installation selbst mit, inklusive gepinnter
-          # Version und Hash-Pruefung. online_access_override umgeht, dass
-          # Blender im Hintergrundmodus keinen Online-Zugriff meldet.
-          "$BLENDER" --background --python-expr "
-          from Sollumz import dependencies
-          ok = dependencies.install_dependencies(online_access_override=True)
-          print('DEPS_INSTALLED' if ok else 'DEPS_FAILED')
-          "
+          "$BLENDER" --background --python ci/install_deps.py
 
       - name: szio-Verfuegbarkeit pruefen
         run: |
@@ -173,7 +164,7 @@ jobs:
 
       - name: Sollumz-Abhaengigkeiten installieren (szio + PyMateria)
         run: |
-          & $env:BLENDER --background --python-expr "from Sollumz import dependencies; print('OK' if dependencies.install_dependencies(online_access_override=True, optional_dependencies_to_install={'pymateria'}) else 'FAILED')"
+          & $env:BLENDER --background --python ci/install_deps.py
 
       - name: texconv installieren
         run: |

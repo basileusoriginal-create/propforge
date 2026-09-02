@@ -1,0 +1,29 @@
+[project]
+name = "propforge"
+version = "0.1.0"
+description = "Automatisierte Prop-Pipeline fuer GTA V / FiveM"
+requires-python = ">=3.11"
+dependencies = [
+    "Pillow>=10.0",
+    "numpy>=1.24",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["propforge"]
+
+[tool.pytest.ini_options]
+# Ohne diese Zeile findet pytest das Paket nicht.
+#
+# Im Standard-Importmodus ("prepend") legt pytest das Verzeichnis der
+# Testdatei in den sys.path - also tests/, nicht das Projektwurzelverzeichnis.
+# "from propforge import ..." schlaegt dann mit ModuleNotFoundError fehl, und
+# zwar schon beim Einsammeln der Tests, was pytest mit Exit-Code 2 quittiert.
+#
+# Lokal faellt das nicht auf, wenn man die Tests ueber ein Skript startet, das
+# die Wurzel selbst in den sys.path haengt. In der CI dann schon.
+pythonpath = ["."]
+testpaths = ["tests"]

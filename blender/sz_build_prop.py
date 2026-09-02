@@ -23,32 +23,35 @@ from pathlib import Path
 import bpy
 
 # --- Sollumz-Importe -------------------------------------------------------
-# Sollumz kann unter drei Namen installiert sein:
-#   "Sollumz"                       - klassisches Add-on (so testet Sollumz selbst)
-#   "sollumz"                       - klassisches Add-on, kleingeschrieben
-#   "bl_ext.user_default.sollumz"   - als Extension (Blender 4.2+)
-SOLLUMZ_MODULE_CANDIDATES = ("Sollumz", "sollumz", "bl_ext.user_default.sollumz")
+# Die Liste der moeglichen Sollumz-Modulnamen liegt in propforge.sollumz_env,
+# damit Umgebungspruefung und Build-Stufe nicht auseinanderlaufen koennen.
+# Das Modul ist bewusst abhaengigkeitsfrei, damit es auch aus Blenders Python
+# importierbar ist.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+try:
+    from propforge.sollumz_env import import_sollumz
+except ImportError:  # Notfallpfad, falls das Repo-Layout nicht mitgereicht wurde
+    def import_sollumz():
+        import importlib
+
+        errors = []
+        for module_name in ("Sollumz", "sollumz", "bl_ext.user_default.sollumz"):
+            try:
+                props = importlib.import_module(f"{module_name}.sollumz_properties")
+                shaders = importlib.import_module(f"{module_name}.ydr.shader_materials")
+                return props.SollumType, props.LODLevel, shaders.create_shader, module_name
+            except ImportError as exc:
+                errors.append(f"  {module_name}: {exc}")
+        raise ImportError("Sollumz nicht gefunden:\n" + "\n".join(errors))
 
 
-def _import_sollumz():
-    import importlib
-
-    errors = []
-    for module_name in SOLLUMZ_MODULE_CANDIDATES:
-        try:
-            props = importlib.import_module(f"{module_name}.sollumz_properties")
-            shaders = importlib.import_module(f"{module_name}.ydr.shader_materials")
-            return props.SollumType, props.LODLevel, shaders.create_shader, module_name
-        except ImportError as exc:
-            errors.append(f"  {module_name}: {exc}")
-
+try:
+    SollumType, LODLevel, create_shader, SOLLUMZ_MODULE = import_sollumz()
+except ImportError as exc:
     raise SystemExit(
-        "Sollumz konnte nicht importiert werden. Add-on installieren und aktivieren.\n"
-        + "\n".join(errors)
-    )
-
-
-SollumType, LODLevel, create_shader, SOLLUMZ_MODULE = _import_sollumz()
+        f"{exc}\n\nAdd-on installieren und aktivieren, dann erneut versuchen."
+    ) from exc
 
 
 LOD_ENUM = {

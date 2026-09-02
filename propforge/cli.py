@@ -92,8 +92,12 @@ def cmd_build(args: argparse.Namespace) -> int:
         return 2
 
     script = Path(__file__).resolve().parent.parent / "blender" / "sz_build_prop.py"
+    # Kein --factory-startup: das deaktiviert saemtliche Add-ons, also auch
+    # Sollumz, und haengt dessen site-packages (szio, PyMateria) nicht ein.
+    # Der Build wuerde dann mit "Sollumz nicht gefunden" scheitern, obwohl
+    # alles korrekt installiert ist.
     cmd = [
-        blender, "--background", "--factory-startup",
+        blender, "--background",
         "--python", str(script), "--",
         "--job", str(jobs_file),
         "--format", config.export_format,

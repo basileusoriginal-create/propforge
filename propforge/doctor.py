@@ -13,6 +13,8 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import sollumz_env
+
 
 @dataclass
 class Check:
@@ -37,14 +39,32 @@ def _blender_version(exe: str) -> str | None:
 
 
 def _blender_python(exe: str, code: str) -> str | None:
-    """Fuehrt ein Snippet in Blenders eigenem Python aus und gibt stdout zurueck."""
+    """Fuehrt ein Snippet in Blenders eigenem Python aus und gibt stdout zurueck.
+
+    Der Code wird in eine temporaere Datei geschrieben und mit ``--python``
+    ausgefuehrt, nicht mit ``--python-expr``. Mehrzeiliger Code ueber
+    ``--python-expr`` durch Shell und YAML zu schleusen ist eine
+    Fehlerquelle, die man sich sparen kann.
+
+    Wichtig: **ohne** ``--factory-startup``, denn die aktivierten Add-ons und
+    ihre Abhaengigkeiten werden erst beim normalen Start gemountet.
+    """
+    import tempfile
+
+    with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False, encoding="utf-8") as fh:
+        fh.write(code)
+        script = fh.name
+
     try:
         out = subprocess.run(
-            [exe, "--background", "--factory-startup", "--python-expr", code],
-            capture_output=True, text=True, timeout=180,
+            [exe, "--background", "--python", script],
+            capture_output=True, text=True, timeout=300,
         )
     except (OSError, subprocess.SubprocessError):
         return None
+    finally:
+        Path(script).unlink(missing_ok=True)
+
     return out.stdout
 
 
@@ -79,30 +99,24 @@ def run(blender: str | None = None, texconv: str | None = None) -> list[Check]:
     ))
 
     # --- Sollumz und seine Abhaengigkeiten in Blenders Python ---
-    probe = (
-        "import sys;"
-        "mods = [];"
-        "\nfor name in ('sollumz', 'bl_ext.user_default.sollumz'):\n"
-        "    try:\n"
-        "        __import__(name); mods.append(name)\n"
-        "    except Exception: pass\n"
-        "print('SOLLUMZ=' + (mods[0] if mods else 'NONE'))\n"
-        "for dep in ('szio', 'pymateria'):\n"
-        "    try:\n"
-        "        __import__(dep); print(dep.upper() + '=YES')\n"
-        "    except Exception: print(dep.upper() + '=NO')\n"
-    )
-    out = _blender_python(exe, probe)
+    # Die Kandidatenliste kommt aus sollumz_env, damit Pruefung und
+    # Build-Stufe nicht auseinanderlaufen koennen.
+    out = _blender_python(exe, sollumz_env.probe_source())
     if out is None:
         checks.append(Check("Sollumz", None, "Pruefung fehlgeschlagen"))
         return checks
 
     sollumz = next((l.split("=", 1)[1] for l in out.splitlines() if l.startswith("SOLLUMZ=")), "NONE")
-    checks.append(Check(
-        "Sollumz", sollumz != "NONE",
-        f"importierbar als '{sollumz}'" if sollumz != "NONE"
-        else "nicht gefunden - Add-on installieren und aktivieren",
-    ))
+    if sollumz != "NONE":
+        detail = f"importierbar als '{sollumz}'"
+    else:
+        # Ohne Rohausgabe ist ein CI-Fehlschlag hier kaum zuzuordnen.
+        tried = ", ".join(sollumz_env.MODULE_CANDIDATES)
+        detail = (
+            f"unter keinem dieser Namen gefunden: {tried}"
+            " - Add-on installieren und aktivieren"
+        )
+    checks.append(Check("Sollumz", sollumz != "NONE", detail))
 
     szio = "SZIO=YES" in out
     checks.append(Check(
