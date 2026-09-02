@@ -436,6 +436,50 @@ def export(drawable: bpy.types.Object, out_dir: Path, fmt: str, version: str) ->
     if result != {"FINISHED"}:
         raise RuntimeError(f"Export lieferte {result} statt FINISHED.")
 
+    # FINISHED heisst bei Sollumz nicht, dass etwas geschrieben wurde: bricht
+    # der Export intern ab (etwa weil ein Material fehlt), landet das als
+    # Warnung im Log und der Operator meldet trotzdem Erfolg. Deshalb wird
+    # hier gegen das Dateisystem geprueft.
+    written = sorted(
+        p for p in out_dir.iterdir()
+        if p.is_file() and p.name.startswith(drawable.name) and ".ydr" in p.name
+    )
+    if not written:
+        existing = [p.name for p in out_dir.iterdir() if p.is_file()] or ["(nichts)"]
+        raise RuntimeError(
+            f"Der Export hat keine Datei fuer '{drawable.name}' erzeugt. "
+            f"Im Zielverzeichnis liegt: {', '.join(existing)}. "
+            "Die Ursache steht als WARNING in der Sollumz-Ausgabe weiter oben."
+        )
+
+    for path in written:
+        log(f"  geschrieben: {path.name} ({path.stat().st_size} Bytes)")
+
+
+def ensure_lod_materials(
+    lod_meshes: dict[str, bpy.types.Mesh],
+    source: bpy.types.Object,
+) -> None:
+    """Stellt sicher, dass jede LOD-Stufe das Shadermaterial traegt.
+
+    Sollumz bricht den Export ab, wenn ein Drawable Model kein Sollumz-Material
+    hat - und zwar mit einer Warnung im Log, nicht mit einer Exception. Ohne
+    diese Pruefung wuerde der Build als erfolgreich gelten und nur keine Datei
+    erzeugen.
+    """
+    if not source.data.materials:
+        raise RuntimeError(
+            "Das Quell-Mesh hat kein Material - build_material ist nicht gelaufen "
+            "oder der Shader konnte nicht angelegt werden."
+        )
+
+    material = source.data.materials[0]
+    for lod_key, mesh in lod_meshes.items():
+        if mesh.materials:
+            continue
+        log(f"  LOD {lod_key}: Material fehlte, wird nachgetragen.")
+        mesh.materials.append(material)
+
 
 # --- Ablauf -----------------------------------------------------------------
 
@@ -451,6 +495,12 @@ def build(job: dict, fmt: str, version: str) -> None:
     clamp_to_budget(source, int(job["max_tris"]))
     log(f"LOD0: {tri_count(source)} Dreiecke")
 
+    # Material VOR den LOD-Kopien anlegen. Mesh-Datenblöcke tragen ihre
+    # Materialliste mit, wenn sie kopiert werden - andersherum bekommen die
+    # LOD-Meshes keins, und Sollumz bricht den Export mit
+    # "has no Sollumz materials! Aborting..." ab. Genau so ist es passiert.
+    build_material(job, source)
+
     # LOD-Meshes vor der Drawable-Konvertierung erzeugen, damit die
     # Decimate-Hilfsobjekte die Sollumz-Hierarchie nicht verschmutzen.
     lod_meshes: dict[str, bpy.types.Mesh] = {}
@@ -459,7 +509,7 @@ def build(job: dict, fmt: str, version: str) -> None:
         lod_meshes[lod_key] = mesh
         log(f"  LOD {lod_key:<8} ratio {float(ratio):.2f} -> {len(mesh.polygons)} Faces")
 
-    build_material(job, source)
+    ensure_lod_materials(lod_meshes, source)
 
     configure_conversion(job)
     before = set(bpy.data.objects)
