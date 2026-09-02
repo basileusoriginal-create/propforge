@@ -466,9 +466,16 @@ def main(argv: list[str]) -> int:
     for job in jobs:
         try:
             build(job, args.format, args.version)
-        except Exception as exc:  # noqa: BLE001 - ein kaputter Prop darf den Batch nicht stoppen
+        except Exception:  # noqa: BLE001 - ein kaputter Prop darf den Batch nicht stoppen
+            import traceback
+
             failed += 1
-            log(f"FEHLER bei '{job.get('name', '?')}': {exc}")
+            # Vollstaendiger Traceback, nicht nur str(exc): bei Blender-Operatoren
+            # steht die eigentliche Ursache fast immer in der Aufrufkette, nicht
+            # in der Fehlermeldung selbst.
+            log(f"FEHLER bei '{job.get('name', '?')}':")
+            for line in traceback.format_exc().splitlines():
+                log(f"  {line}")
 
     log(f"Fertig: {len(jobs) - failed}/{len(jobs)} Props gebaut.")
     return 1 if failed else 0
