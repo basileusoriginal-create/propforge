@@ -108,6 +108,13 @@ jobs:
           pip install -r requirements.txt
           python -m propforge.cli doctor --blender "$BLENDER" 2>&1 | tee -a ci-build.log
 
+      - name: DDS-Konverter sicherstellen
+        run: |
+          # Der Linux-Lauf hat kein texconv (Windows-Werkzeug). ImageMagick
+          # kann DXT1 und DXT5 und deckt damit alles ab, was ein statischer
+          # Prop braucht. Auf ubuntu-latest ist es meist schon vorhanden.
+          which convert magick || sudo apt-get install -y --no-install-recommends imagemagick
+
       - name: Testasset erzeugen
         run: python tools/make_testasset.py --out ci/assets
 

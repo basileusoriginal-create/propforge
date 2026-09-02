@@ -133,13 +133,17 @@ def run(blender: str | None = None, texconv: str | None = None) -> list[Check]:
         required=False,
     ))
 
-    # --- texconv ---
-    tc = texconv or shutil.which("texconv") or shutil.which("texconv.exe")
-    checks.append(Check(
-        "texconv", tc is not None,
-        tc if tc else "fehlt - DDS-Schritt wird uebersprungen (DirectXTex installieren)",
-        required=False,
-    ))
+    # --- DDS-Konverter ---
+    from .textures import find_dds_converter
+
+    converter = find_dds_converter(texconv)
+    if converter is None:
+        detail = "keiner gefunden - texconv (DirectXTex) oder ImageMagick installieren"
+    else:
+        kind, path = converter
+        note = "" if kind == "texconv" else " - nur DXT1/DXT5, fuer Props ausreichend"
+        detail = f"{kind}: {path}{note}"
+    checks.append(Check("DDS-Konverter", converter is not None, detail, required=False))
 
     return checks
 

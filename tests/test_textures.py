@@ -142,7 +142,20 @@ class TestPrepare:
         diffuse = next(p for p in prepared if p.role == "diffuse")
         assert diffuse.dds_format == "BC3_UNORM"
 
-    def test_compress_without_texconv_raises(self, tmp_path):
+    def test_compress_without_any_converter_raises(self, tmp_path):
         prepared = textures.prepare(self._spec(tmp_path), tmp_path / "out")
-        with pytest.raises(textures.TextureError, match="texconv"):
-            textures.compress(prepared, tmp_path / "dds", texconv=None)
+        original = textures.find_dds_converter
+        textures.find_dds_converter = lambda preferred=None: None
+        try:
+            with pytest.raises(textures.TextureError, match="DDS-Konverter"):
+                textures.compress(prepared, tmp_path / "dds")
+        finally:
+            textures.find_dds_converter = original
+
+    def test_texconv_is_preferred_over_imagemagick(self, tmp_path):
+        # texconv beherrscht mehr Formate und ist das Werkzeug, mit dem die
+        # GTA-Community arbeitet - es muss Vorrang haben.
+        assert textures.find_dds_converter("/pfad/zu/texconv.exe") == (
+            "texconv",
+            "/pfad/zu/texconv.exe",
+        )

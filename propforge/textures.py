@@ -188,39 +188,106 @@ def prepare(spec: PropSpec, out_dir: Path) -> list[PreparedTexture]:
     return prepared
 
 
+# ImageMagick kennt die DirectX-Formatnamen nicht, sondern nur die alten
+# DXT-Bezeichnungen. BC1 entspricht DXT1, BC3 entspricht DXT5.
+IMAGEMAGICK_COMPRESSION = {
+    "BC1_UNORM": "dxt1",
+    "BC3_UNORM": "dxt5",
+}
+
+
 def find_texconv() -> str | None:
     return shutil.which("texconv") or shutil.which("texconv.exe")
 
 
-def compress(prepared: list[PreparedTexture], out_dir: Path, texconv: str | None = None) -> list[Path]:
-    """Komprimiert die aufbereiteten PNGs zu DDS mit vollstaendiger Mipmap-Kette.
+def find_dds_converter(preferred: str | None = None) -> tuple[str, str] | None:
+    """Sucht ein Werkzeug, das DDS schreiben kann.
 
-    `-m 0` erzeugt alle Mipmap-Stufen; ohne Mipmaps flimmern Props in der
-    Distanz sichtbar.
+    Rueckgabe ist (Art, Pfad). texconv hat Vorrang - es ist das Werkzeug, mit
+    dem die GTA-Community arbeitet, und beherrscht die vollstaendige
+    Formatpalette. ImageMagick ist der plattformunabhaengige Ausweg: es kann
+    DXT1 und DXT5, und das deckt alles ab, was ein statischer Prop braucht.
     """
-    exe = texconv or find_texconv()
-    if exe is None:
+    if preferred:
+        return ("texconv", preferred)
+    exe = find_texconv()
+    if exe:
+        return ("texconv", exe)
+    for candidate in ("magick", "convert"):
+        found = shutil.which(candidate)
+        if found:
+            return ("imagemagick", found)
+    return None
+
+
+def _compress_texconv(exe: str, tex: PreparedTexture, out_dir: Path) -> Path:
+    # -m 0 erzeugt alle Mipmap-Stufen; ohne Mipmaps flimmern Props in der Distanz.
+    cmd = [exe, "-f", tex.dds_format, "-m", "0", "-y", "-nologo", "-o", str(out_dir), str(tex.path)]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise TextureError(f"texconv fehlgeschlagen fuer {tex.path.name}:\n{proc.stderr}")
+    return out_dir / f"{tex.path.stem}.dds"
+
+
+def mip_levels(width: int, height: int) -> int:
+    """Anzahl Mipmap-Stufen bis hinunter zu 1x1."""
+    return int(math.log2(max(width, height))) + 1
+
+
+def _compress_imagemagick(exe: str, tex: PreparedTexture, out_dir: Path) -> Path:
+    compression = IMAGEMAGICK_COMPRESSION.get(tex.dds_format)
+    if compression is None:
         raise TextureError(
-            "texconv nicht gefunden. DirectXTex installieren "
-            "(https://github.com/microsoft/DirectXTex/releases) und in den PATH legen."
+            f"ImageMagick kann {tex.dds_format} nicht schreiben. "
+            "Fuer dieses Format wird texconv benoetigt."
         )
 
+    with Image.open(tex.path) as img:
+        levels = mip_levels(*img.size)
+
+    target = out_dir / f"{tex.path.stem}.dds"
+    cmd = [exe, str(tex.path)]
+
+    # Zwei nachgemessene Eigenheiten von ImageMagick:
+    #
+    # 1. "dds:mipmaps=true" erzeugt stillschweigend genau EINE Stufe. Die
+    #    Option erwartet eine Zahl. Ohne Mipmaps flimmern Props in der Distanz.
+    # 2. Ohne Alphakanal degradiert ImageMagick dxt5 kommentarlos auf dxt1.
+    #    Fuer Normalmaps ist das fatal - DXT1 zerstoert sie sichtbar.
+    if compression == "dxt5":
+        cmd += ["-alpha", "set"]
+
+    cmd += [
+        "-define", f"dds:compression={compression}",
+        "-define", f"dds:mipmaps={levels}",
+        str(target),
+    ]
+
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0 or not target.is_file():
+        raise TextureError(
+            f"ImageMagick fehlgeschlagen fuer {tex.path.name}:\n{proc.stderr or proc.stdout}"
+        )
+    return target
+
+
+def compress(prepared: list[PreparedTexture], out_dir: Path, texconv: str | None = None) -> list[Path]:
+    """Komprimiert die aufbereiteten PNGs zu DDS mit Mipmap-Kette."""
+    converter = find_dds_converter(texconv)
+    if converter is None:
+        raise TextureError(
+            "Kein DDS-Konverter gefunden. Entweder texconv installieren "
+            "(https://github.com/microsoft/DirectXTex/releases) oder ImageMagick."
+        )
+
+    kind, exe = converter
     out_dir.mkdir(parents=True, exist_ok=True)
     results: list[Path] = []
 
     for tex in prepared:
-        cmd = [
-            exe,
-            "-f", tex.dds_format,
-            "-m", "0",
-            "-y",
-            "-nologo",
-            "-o", str(out_dir),
-            str(tex.path),
-        ]
-        proc = subprocess.run(cmd, capture_output=True, text=True)
-        if proc.returncode != 0:
-            raise TextureError(f"texconv fehlgeschlagen fuer {tex.path.name}:\n{proc.stderr}")
-        results.append(out_dir / f"{tex.path.stem}.dds")
+        if kind == "texconv":
+            results.append(_compress_texconv(exe, tex, out_dir))
+        else:
+            results.append(_compress_imagemagick(exe, tex, out_dir))
 
     return results
