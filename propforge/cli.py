@@ -48,7 +48,24 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def cmd_textures(args: argparse.Namespace) -> int:
     config = _load(args.config)
-    exe = args.texconv or textures.find_texconv()
+
+    # find_dds_converter statt find_texconv: letzteres kennt nur das
+    # Windows-Werkzeug. Der Aufrufer hier war nach der Umstellung auf den
+    # plattformunabhaengigen Konverter versehentlich stehen geblieben - der
+    # Linux-Lauf hat deshalb weiter stumm keine DDS erzeugt.
+    converter = textures.find_dds_converter(args.texconv)
+    if converter is None:
+        print(
+            "Kein DDS-Konverter gefunden. Ohne DDS bleiben die Shader-Sampler leer "
+            "und der Prop erscheint im Spiel ohne Textur.\n"
+            "Installiere texconv (DirectXTex) oder ImageMagick.",
+            file=sys.stderr,
+        )
+        return 1
+
+    kind, exe = converter
+    print(f"DDS-Konverter: {kind} ({exe})\n")
+
     total = 0
     for prop in config.props:
         work = config.workdir / "textures" / prop.name
@@ -56,13 +73,12 @@ def cmd_textures(args: argparse.Namespace) -> int:
         print(f"{prop.name}: {len(prepared)} Texturen aufbereitet -> {work}")
         for tex in prepared:
             print(f"    {tex.role:<9} {tex.dds_format:<11} {tex.path.name}")
-        if exe:
-            written = textures.compress(prepared, work, exe)
-            total += len(written)
-        else:
-            print("    (texconv fehlt - DDS-Schritt uebersprungen)")
-    if total:
-        print(f"\n{total} DDS-Dateien geschrieben.")
+        written = textures.compress(prepared, work, args.texconv)
+        for path in written:
+            print(f"    -> {path.name} ({path.stat().st_size} Bytes)")
+        total += len(written)
+
+    print(f"\n{total} DDS-Dateien geschrieben.")
     return 0
 
 
