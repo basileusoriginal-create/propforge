@@ -73,7 +73,11 @@ class TestReport:
     def test_shows_vertex_semantics_in_one_line(self, tmp_path):
         # Die Vertex-Semantik ist der interessanteste Teil des Aufbaus. Sie
         # darf nicht der Tiefenbegrenzung zum Opfer fallen.
-        assert "Layout(type): Position, Normal, Colour0, TexCoord0, Tangent" in body(tmp_path)
+        assert "Layout(type=GTAV1): Position, Normal, Colour0, TexCoord0, Tangent" in body(tmp_path)
+
+    def test_shows_short_attribute_values(self, tmp_path):
+        # "Bounds(type=Composite)" sagt etwas, "Bounds(type)" nicht.
+        assert "Layout(type=GTAV1)" in body(tmp_path)
 
     def test_counts_bulk_data_instead_of_printing_it(self, tmp_path):
         out = body(tmp_path)

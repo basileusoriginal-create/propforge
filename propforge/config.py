@@ -68,7 +68,14 @@ class CollisionSettings:
     # "box"  -> BOUND_BOX, billigste Variante fuer Kisten/Container
     # "hull" -> konvexe Huelle, guter Kompromiss fuer organische Formen
     kind: str = "bvh"
-    flag_preset: str = "Default"
+    # Name eines Sollumz-Kollisionspresets. Der eingebaute Standard heisst
+    # "General (Default)" -- NICHT "Default".
+    #
+    # Der Unterschied ist nicht kosmetisch: Sollumz sucht das Preset nach
+    # Namen und ignoriert einen unbekannten stillschweigend. Die Kollision
+    # hat dann Flags 0 und kollidiert mit nichts. Man laeuft durch den Prop,
+    # ohne dass eine Datei fehlt oder eine Pruefung anschlaegt.
+    flag_preset: str = "General (Default)"
     # Aus welcher LOD-Stufe die Kollision abgeleitet wird. "low" haelt die
     # Kollisionsgeometrie guenstig, ohne die Silhouette zu verlieren.
     source_lod: str = "low"
@@ -261,7 +268,7 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
     collision = CollisionSettings(
         enabled=col_raw.get("enabled", True),
         kind=col_raw.get("kind", "bvh"),
-        flag_preset=col_raw.get("flag_preset", "Default"),
+        flag_preset=col_raw.get("flag_preset", CollisionSettings().flag_preset),
         source_lod=col_raw.get("source_lod", "low"),
     )
 

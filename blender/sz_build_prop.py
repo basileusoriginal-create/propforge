@@ -49,6 +49,9 @@ except ImportError:  # Notfallpfad, falls das Repo-Layout nicht mitgereicht wurd
                     AssetType=props.AssetType,
                     create_shader=shaders.create_shader,
                     mesh_helper=importlib.import_module(f"{module_name}.tools.meshhelper"),
+                    apply_flag_preset=importlib.import_module(
+                        f"{module_name}.tools.boundhelper").apply_flag_preset,
+                    flag_preset_names=[],
                 )
             except ImportError as exc:
                 errors.append(f"  {module_name}: {exc}")
@@ -69,6 +72,8 @@ AssetType = _sz.AssetType
 create_shader = _sz.create_shader
 SOLLUMZ_MODULE = _sz.module
 MESH = _sz.mesh_helper
+apply_flag_preset = _sz.apply_flag_preset
+FLAG_PRESETS = _sz.flag_preset_names
 
 
 LOD_ENUM = {
@@ -575,6 +580,54 @@ def apply_convex_hull(bound_objs: list[bpy.types.Object]) -> None:
         bpy.ops.object.mode_set(mode="OBJECT")
 
 
+def apply_collision_flags(drawable: bpy.types.Object, preset_name: str) -> None:
+    """Setzt die Kollisionsflags und prueft, dass sie auch angekommen sind.
+
+    Ohne Flags kollidiert ein Bound mit nichts. Die Datei ist vollstaendig,
+    die Kollisionsgeometrie liegt drin, jede Pruefung ist zufrieden - und im
+    Spiel laeuft man hindurch.
+
+    Der Weg dorthin ist derselbe wie bei den UV-Namen: Sollumz nimmt den
+    Preset-Namen als Zeichenkette entgegen, sucht ihn und gibt bei
+    Nichtfinden schlicht ``False`` zurueck. Der Aufrufer im Add-on wertet das
+    nicht aus. Ein Tippfehler oder ein veralteter Name - etwa "Default"
+    statt "General (Default)" - bleibt damit folgenlos sichtbar und fatal
+    wirksam.
+
+    Deshalb wird hier der Rueckgabewert ausgewertet UND anschliessend
+    nachgesehen, ob wirklich Flags gesetzt sind.
+    """
+    bounds = [
+        child for child in drawable.children_recursive
+        if getattr(child, "sollum_type", "") in (
+            SollumType.BOUND_GEOMETRYBVH, SollumType.BOUND_GEOMETRY)
+    ]
+    if not bounds:
+        log("Keine Bound-Container gefunden - keine Flags zu setzen.")
+        return
+
+    known = ", ".join(FLAG_PRESETS) if FLAG_PRESETS else "(Liste nicht lesbar)"
+
+    for bound in bounds:
+        if not apply_flag_preset(bound, preset_name):
+            raise RuntimeError(
+                f"Das Kollisions-Preset '{preset_name}' gibt es nicht. "
+                f"Verfuegbar: {known}. Ohne Preset haette die Kollision Flags 0 "
+                "und wuerde mit nichts kollidieren - man liefe durch den Prop "
+                "hindurch, ohne dass eine Datei fehlt."
+            )
+
+        flags1 = int(bound.composite_flags1.total or 0)
+        flags2 = int(bound.composite_flags2.total or 0)
+        if flags1 == 0 and flags2 == 0:
+            raise RuntimeError(
+                f"Preset '{preset_name}' wurde angewandt, '{bound.name}' hat aber "
+                "trotzdem Flags 0. Damit kollidiert der Bound mit nichts."
+            )
+        log(f"  Kollisionsflags '{preset_name}' auf '{bound.name}': "
+            f"{flags1} / {flags2}")
+
+
 def apply_lod_distances(drawable: bpy.types.Object, distances: dict) -> None:
     props = drawable.drawable_properties
     props.lod_dist_high = float(distances.get("high", 60.0))
@@ -908,6 +961,8 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
 
     assign_lods(model, lod_meshes)
     retarget_collision(drawable, lod_meshes, job["collision"])
+    if job["collision"].get("enabled", True):
+        apply_collision_flags(drawable, job["collision"].get("flag_preset", "General (Default)"))
     apply_lod_distances(drawable, job["lod_distances"])
 
     # Erst nach der Kollision: create_ytyp liest am Drawable ab, ob Kollision

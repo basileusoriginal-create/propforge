@@ -149,7 +149,7 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-238 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+239 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
 Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
 die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 
@@ -169,6 +169,13 @@ Metall im Spiel wie Plastik.
 **Normalmap-Green-Flip.** Generatoren geben OpenGL-Konvention (Y+) aus, RAGE
 erwartet DirectX (Y-). Der Fehler äußert sich in Beleuchtung, die nach innen
 statt nach außen wölbt — und fällt oft erst spät auf.
+
+**Kollisions-Preset beim Namen nennen.** Das eingebaute Standard-Preset heißt
+`General (Default)`, nicht `Default`. Sollumz sucht es nach Namen und ignoriert
+einen unbekannten stillschweigend — die Kollision hat dann Flags `0` und
+kollidiert mit nichts. Man läuft durch den Prop, ohne dass eine Datei fehlt.
+Die Pipeline wertet den Rückgabewert aus und prüft danach nach, ob wirklich
+Flags gesetzt sind.
 
 **UV-Maps und Farb-Attribute nach Sollumz-Konvention.** Sollumz sucht die
 Vertexdaten unter festen Namen — `UVMap 0`, `Color 1`. Heißt die UV-Map wie bei

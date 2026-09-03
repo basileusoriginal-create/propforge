@@ -32,7 +32,7 @@ verylow = 500.0
 [defaults.collision]
 enabled = true
 kind = "hull"
-flag_preset = "Default"
+flag_preset = "General (Default)"
 source_lod = "low"
 
 [[prop]]

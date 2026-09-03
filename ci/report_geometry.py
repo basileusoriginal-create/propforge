@@ -43,7 +43,10 @@ def line_count(node: ET.Element) -> int:
 def describe(node: ET.Element, depth: int = 0, max_depth: int = 3) -> list[str]:
     """Beschreibt einen Teilbaum: Tag, Attribute, Datenmenge."""
     pad = "  " * depth
-    attrs = ",".join(node.attrib) or ""
+    # Attributwerte mitnehmen, solange sie kurz sind - "Bounds(type=Composite)"
+    # sagt etwas, "Bounds(type)" nicht. Lange Zahlentripel bleiben draussen.
+    full = ", ".join(f"{k}={v}" for k, v in node.attrib.items())
+    attrs = full if len(full) <= 60 else ", ".join(node.attrib)
     head = f"{pad}{node.tag}" + (f"({attrs})" if attrs else "")
 
     text = (node.text or "").strip()
@@ -116,6 +119,26 @@ def report(path: Path) -> list[str]:
                 tex_name = (tex.text or "").strip() if tex is not None else ""
                 mark = "" if tex_name in embedded else "  <- nicht im Woerterbuch!"
                 lines.append(f"    {p.attrib.get('name', '?')} -> {tex_name or '(leer)'}{mark}")
+
+    # Huellkoerper des Drawables. Sie entscheiden, ob das Spiel den Prop
+    # ueberhaupt zeichnet: ist die Huelle zu klein oder falsch platziert,
+    # wird das Objekt weggecullt, obwohl die Geometrie einwandfrei ist.
+    for tag in ("BoundingSphereCenter", "BoundingSphereRadius",
+                "BoundingBoxMin", "BoundingBoxMax"):
+        node = first(root, tag)
+        if node is None:
+            continue
+        value = ", ".join(f"{k}={v}" for k, v in node.attrib.items()) or (node.text or "").strip()
+        lines.append(f"  {tag}: {value}")
+
+    # Kollision. Die Flags sind der interessante Teil: ein Bound mit Flags 0
+    # liegt vollstaendig in der Datei und kollidiert trotzdem mit nichts.
+    bounds = first(root, "Bounds")
+    if bounds is None:
+        lines.append("  Bounds: (keine)")
+    else:
+        lines.append("  Bounds:")
+        lines.extend("  " + l for l in describe(bounds, depth=1, max_depth=2))
 
     # Aufbau der ersten Geometrie der hoechsten Stufe. Dort steht, welche
     # Vertex-Semantiken die Datei traegt und wie viele Werte drinstehen.

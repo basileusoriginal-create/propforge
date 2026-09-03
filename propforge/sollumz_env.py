@@ -68,9 +68,10 @@ class SollumzAPI:
     """
 
     __slots__ = ("module", "SollumType", "LODLevel", "ArchetypeType",
-                 "AssetType", "create_shader", "mesh_helper")
+                 "AssetType", "create_shader", "mesh_helper",
+                 "apply_flag_preset", "flag_preset_names")
 
-    def __init__(self, module_name, props, shaders, mesh_helper):
+    def __init__(self, module_name, props, shaders, mesh_helper, bound_helper, flag_presets):
         self.module = module_name
         self.SollumType = props.SollumType
         self.LODLevel = props.LODLevel
@@ -80,6 +81,25 @@ class SollumzAPI:
         # Ganzes Modul statt einzelner Funktionen: hier liegen die Helfer fuer
         # UV-Maps und Farb-Attribute, und davon werden es eher mehr.
         self.mesh_helper = mesh_helper
+        self.apply_flag_preset = bound_helper.apply_flag_preset
+        self.flag_preset_names = flag_presets
+
+
+def _flag_preset_names(module_name: str) -> list[str]:
+    """Namen aller verfuegbaren Kollisions-Flag-Presets.
+
+    Wird nur gebraucht, um im Fehlerfall etwas Brauchbares sagen zu koennen:
+    ein Preset-Name, den es nicht gibt, wird von Sollumz stillschweigend
+    ignoriert - die Kollision hat dann Flags 0 und kollidiert mit nichts.
+    """
+    import importlib
+
+    try:
+        store = importlib.import_module(f"{module_name}.shared.presets.store")
+        flag = importlib.import_module(f"{module_name}.ybn.gta5.presets.flag")
+        return [p.get("name", "?") for p in store.load_presets(flag.FLAG_PRESET_CATEGORY)]
+    except Exception:  # noqa: BLE001 - eine fehlende Liste darf nichts kippen
+        return []
 
 
 def import_sollumz() -> "SollumzAPI":
@@ -96,7 +116,11 @@ def import_sollumz() -> "SollumzAPI":
             props = importlib.import_module(f"{module_name}.sollumz_properties")
             shaders = importlib.import_module(f"{module_name}.ydr.shader_materials")
             mesh_helper = importlib.import_module(f"{module_name}.tools.meshhelper")
-            return SollumzAPI(module_name, props, shaders, mesh_helper)
+            bound_helper = importlib.import_module(f"{module_name}.tools.boundhelper")
+            return SollumzAPI(
+                module_name, props, shaders, mesh_helper, bound_helper,
+                _flag_preset_names(module_name),
+            )
         except ImportError as exc:
             errors.append(f"  {module_name}: {exc}")
 
