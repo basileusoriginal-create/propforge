@@ -68,16 +68,22 @@ class SollumzAPI:
     """
 
     __slots__ = ("module", "SollumType", "LODLevel", "ArchetypeType",
-                 "AssetType", "create_shader", "mesh_helper",
-                 "apply_flag_preset", "flag_preset_names")
+                 "AssetType", "MaterialType", "create_shader", "mesh_helper",
+                 "apply_flag_preset", "flag_preset_names",
+                 "create_collision_material", "collision_material_names")
 
-    def __init__(self, module_name, props, shaders, mesh_helper, bound_helper, flag_presets):
+    def __init__(self, module_name, props, shaders, mesh_helper, bound_helper,
+                 flag_presets, col_mats):
         self.module = module_name
         self.SollumType = props.SollumType
         self.LODLevel = props.LODLevel
         self.ArchetypeType = props.ArchetypeType
         self.AssetType = props.AssetType
+        self.MaterialType = props.MaterialType
         self.create_shader = shaders.create_shader
+        self.create_collision_material = col_mats.create_collision_material_from_index
+        # Reihenfolge = Materialindex, so liest Sollumz die Liste selbst.
+        self.collision_material_names = [m.name for m in col_mats.collisionmats]
         # Ganzes Modul statt einzelner Funktionen: hier liegen die Helfer fuer
         # UV-Maps und Farb-Attribute, und davon werden es eher mehr.
         self.mesh_helper = mesh_helper
@@ -117,9 +123,10 @@ def import_sollumz() -> "SollumzAPI":
             shaders = importlib.import_module(f"{module_name}.ydr.shader_materials")
             mesh_helper = importlib.import_module(f"{module_name}.tools.meshhelper")
             bound_helper = importlib.import_module(f"{module_name}.tools.boundhelper")
+            col_mats = importlib.import_module(f"{module_name}.ybn.collision_materials")
             return SollumzAPI(
                 module_name, props, shaders, mesh_helper, bound_helper,
-                _flag_preset_names(module_name),
+                _flag_preset_names(module_name), col_mats,
             )
         except ImportError as exc:
             errors.append(f"  {module_name}: {exc}")

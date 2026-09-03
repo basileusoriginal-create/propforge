@@ -149,7 +149,7 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-239 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+242 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
 Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
 die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 
@@ -169,6 +169,13 @@ Metall im Spiel wie Plastik.
 **Normalmap-Green-Flip.** Generatoren geben OpenGL-Konvention (Y+) aus, RAGE
 erwartet DirectX (Y-). Der Fehler äußert sich in Beleuchtung, die nach innen
 statt nach außen wölbt — und fällt oft erst spät auf.
+
+**Kollisionsmaterial ist Pflicht, nicht Kosmetik.** Sollumz verwirft beim
+Export jedes Bound-Mesh, das kein Kollisionsmaterial trägt — oder eines mit
+einem Nicht-Kollisionsmaterial. Beides trifft zu, wenn die Kollision als Kopie
+des Rendermeshes entsteht: sie bringt dessen Shadermaterial mit. Übrig bleibt
+ein Bound Composite ohne Kinder, eine gültige leere Hülle. Die Datei enthält
+einen Kollisionsblock, und man läuft trotzdem hindurch.
 
 **Kollisions-Preset beim Namen nennen.** Das eingebaute Standard-Preset heißt
 `General (Default)`, nicht `Default`. Sollumz sucht es nach Namen und ignoriert

@@ -79,6 +79,14 @@ class CollisionSettings:
     # Aus welcher LOD-Stufe die Kollision abgeleitet wird. "low" haelt die
     # Kollisionsgeometrie guenstig, ohne die Silhouette zu verlieren.
     source_lod: str = "low"
+    # Kollisionsmaterial (Oberflaechenart: Schrittgeraeusche, Einschlaege,
+    # Reifengrip). Namen wie in Sollumz: DEFAULT, CONCRETE, WOOD_SOLID_MEDIUM,
+    # METAL_SOLID_MEDIUM, ...
+    #
+    # Kein Kosmetikfeld: OHNE Kollisionsmaterial verwirft Sollumz den ganzen
+    # Bound beim Export. Was bleibt, ist ein leeres Bound Composite - eine
+    # gueltige Datei, durch die man hindurchlaeuft.
+    material: str = "DEFAULT"
 
 
 # Archetyp-Flag 6 ("Static") - Bit 5, also 32. Der uebliche Wert fuer einen
@@ -270,6 +278,7 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
         kind=col_raw.get("kind", "bvh"),
         flag_preset=col_raw.get("flag_preset", CollisionSettings().flag_preset),
         source_lod=col_raw.get("source_lod", "low"),
+        material=str(col_raw.get("material", CollisionSettings().material)).upper(),
     )
 
     ytyp_raw = merged.get("ytyp", {})

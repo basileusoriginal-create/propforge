@@ -29,6 +29,7 @@ def make_ydr_xml(
     textures=(("pf_crate_d", "D3DFMT_DXT1", 1024, 1024),),
     bounds="GeometryBVH",
     geometries_per_lod=1,
+    bound_children=1,
     semantics=("Position", "Normal", "Colour0", "TexCoord0", "Tangent"),
     vertices=12,
     indices=18,
@@ -62,7 +63,13 @@ def make_ydr_xml(
         f"<{element_for[l]}><Item><Geometries>{geo}</Geometries></Item></{element_for[l]}>"
         for l in lods
     )
-    bounds_xml = f'<Bounds type="{bounds}"><Margin value="0.04" /></Bounds>' if bounds else ""
+    if bounds:
+        kids = "".join(f'<Item type="{bounds}"><Margin value="0.04" /></Item>'
+                       for _ in range(bound_children))
+        bounds_xml = (f'<Bounds type="Composite"><Margin value="0.04" />'
+                      f"<Children>{kids}</Children></Bounds>")
+    else:
+        bounds_xml = ""
 
     return f"""<?xml version='1.0' encoding='UTF-8'?>
 <Drawable>
@@ -136,6 +143,11 @@ class TestParseDrawable:
         assert pf_inspect.parse_drawable(write_ydr(tmp_path)).has_collision is True
         assert pf_inspect.parse_drawable(write_ydr(tmp_path, bounds=None)).has_collision is False
 
+    def test_counts_bound_children(self, tmp_path):
+        assert pf_inspect.parse_drawable(write_ydr(tmp_path)).bound_children == 1
+        assert pf_inspect.parse_drawable(
+            write_ydr(tmp_path, bound_children=0)).bound_children == 0
+
     def test_texture_power_of_two_flag(self, tmp_path):
         info = pf_inspect.parse_drawable(
             write_ydr(tmp_path, textures=(("t", "D3DFMT_DXT1", 1000, 1024),))
@@ -206,6 +218,18 @@ class TestVerifyDrawable:
     def test_unbound_sampler_flagged(self, tmp_path):
         info = pf_inspect.parse_drawable(write_ydr(tmp_path, samplers=("DiffuseSampler",)))
         assert "sampler_not_bound" in codes(pf_verify.verify_drawable(make_spec(), info))
+
+    def test_empty_composite_flagged(self, tmp_path):
+        # Composite vorhanden, aber ohne Kinder: gueltige Datei, im Spiel
+        # laeuft man hindurch. Genau dieser Fall ist uns durchgerutscht.
+        info = pf_inspect.parse_drawable(write_ydr(tmp_path, bound_children=0))
+        found = pf_verify.verify_drawable(make_spec(), info)
+        assert "collision_composite_empty" in codes(found, Level.ERROR)
+
+    def test_populated_composite_not_flagged(self, tmp_path):
+        info = pf_inspect.parse_drawable(write_ydr(tmp_path))
+        assert "collision_composite_empty" not in codes(
+            pf_verify.verify_drawable(make_spec(), info))
 
     def test_missing_collision_flagged(self, tmp_path):
         info = pf_inspect.parse_drawable(write_ydr(tmp_path, bounds=None))

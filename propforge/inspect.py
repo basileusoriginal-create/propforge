@@ -72,6 +72,10 @@ class DrawableInfo:
     textures: list[TextureInfo] = field(default_factory=list)
     lods: dict[str, LodInfo] = field(default_factory=dict)
     bounds: list[str] = field(default_factory=list)
+    # Anzahl der Kinder in den Bound Composites. Ein Composite ohne Kinder
+    # ist eine leere Huelle: die Datei enthaelt einen Kollisionsblock, das
+    # Spiel findet darin aber nichts, woran man anstossen koennte.
+    bound_children: int = 0
 
     @property
     def has_collision(self) -> bool:
@@ -98,7 +102,9 @@ class DrawableInfo:
                 lines.append(f"  Textur      {t.name} {t.width}x{t.height} {t.fmt}{flag}")
         else:
             lines.append("  Textur      keine eingebettet")
-        lines.append(f"  Kollision   {', '.join(self.bounds) if self.bounds else 'keine'}")
+        lines.append(
+            f"  Kollision   {', '.join(self.bounds) if self.bounds else 'keine'}"
+            + (f" ({self.bound_children} Kind-Bound(s))" if self.bounds else ""))
         return "\n".join(lines)
 
 
@@ -231,8 +237,18 @@ def parse_drawable(path: str | Path) -> DrawableInfo:
         )
 
     # --- Kollision ---
+    #
+    # Nicht nur zaehlen, ob ein Bounds-Block da ist. Ein Bound Composite ohne
+    # Kinder ist eine gueltige, leere Huelle - die Datei sieht vollstaendig
+    # aus, und im Spiel laeuft man hindurch. Genau so ist es passiert:
+    # Sollumz verwirft ein Bound-Mesh ohne Kollisionsmaterial und schreibt
+    # das Composite trotzdem.
     for bounds in root.iter("Bounds"):
         info.bounds.append(bounds.attrib.get("type", "?"))
+        if bounds.attrib.get("type", "").lower() != "composite":
+            continue
+        children = _child(bounds, "Children")
+        info.bound_children += len(list(children)) if children is not None else 0
 
     return info
 

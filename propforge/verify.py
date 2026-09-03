@@ -168,6 +168,15 @@ def verify_drawable(spec: PropSpec, info: DrawableInfo) -> list[Finding]:
     if spec.collision.enabled and not info.has_collision:
         add(Level.ERROR, "collision_missing",
             "Kollision war aktiviert, im Export ist aber kein Bound enthalten.")
+    elif spec.collision.enabled and info.bound_children == 0:
+        # Der Fall, der uns durchgerutscht ist: das Composite steht in der
+        # Datei, aber ohne Kinder. Sollumz verwirft ein Bound-Mesh ohne
+        # Kollisionsmaterial stillschweigend und schreibt die leere Huelle.
+        add(Level.ERROR, "collision_composite_empty",
+            "Das Bound Composite hat keine Kind-Bounds - eine leere Huelle. "
+            "Die Datei enthaelt einen Kollisionsblock, im Spiel laeuft man "
+            "hindurch. Meist fehlt der Kollisionsgeometrie ein "
+            "Kollisionsmaterial.")
     if not spec.collision.enabled and info.has_collision:
         add(Level.WARNING, "collision_unexpected",
             "Kollision war deaktiviert, der Export enthaelt aber einen Bound.")

@@ -49,9 +49,17 @@ except ImportError:  # Notfallpfad, falls das Repo-Layout nicht mitgereicht wurd
                     AssetType=props.AssetType,
                     create_shader=shaders.create_shader,
                     mesh_helper=importlib.import_module(f"{module_name}.tools.meshhelper"),
+                    MaterialType=props.MaterialType,
                     apply_flag_preset=importlib.import_module(
                         f"{module_name}.tools.boundhelper").apply_flag_preset,
                     flag_preset_names=[],
+                    create_collision_material=importlib.import_module(
+                        f"{module_name}.ybn.collision_materials"
+                    ).create_collision_material_from_index,
+                    collision_material_names=[
+                        m.name for m in importlib.import_module(
+                            f"{module_name}.ybn.collision_materials").collisionmats
+                    ],
                 )
             except ImportError as exc:
                 errors.append(f"  {module_name}: {exc}")
@@ -74,6 +82,9 @@ SOLLUMZ_MODULE = _sz.module
 MESH = _sz.mesh_helper
 apply_flag_preset = _sz.apply_flag_preset
 FLAG_PRESETS = _sz.flag_preset_names
+MaterialType = _sz.MaterialType
+create_collision_material = _sz.create_collision_material
+COLLISION_MATERIALS = _sz.collision_material_names
 
 
 LOD_ENUM = {
@@ -541,10 +552,7 @@ def retarget_collision(
         log(f"Kollisions-LOD '{source_lod}' nicht vorhanden - behalte LOD0-Kollision.")
         return
 
-    bound_objs = [
-        child for child in drawable.children_recursive
-        if child.type == "MESH" and getattr(child, "sollum_type", "").startswith("sollumz_bound")
-    ]
+    bound_objs = find_bound_meshes(drawable)
     if not bound_objs:
         log("Keine Bound-Geometrie gefunden - Kollision unveraendert.")
         return
@@ -578,6 +586,69 @@ def apply_convex_hull(bound_objs: list[bpy.types.Object]) -> None:
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.mesh.quads_convert_to_tris(quad_method="BEAUTY", ngon_method="BEAUTY")
         bpy.ops.object.mode_set(mode="OBJECT")
+
+
+def find_bound_meshes(drawable: bpy.types.Object) -> list[bpy.types.Object]:
+    """Alle Mesh-Objekte der eingebetteten Kollision."""
+    return [
+        child for child in drawable.children_recursive
+        if child.type == "MESH" and getattr(child, "sollum_type", "").startswith("sollumz_bound")
+    ]
+
+
+def apply_collision_material(bound_objs: list[bpy.types.Object], material_name: str) -> None:
+    """Gibt der Kollisionsgeometrie ein Kollisionsmaterial.
+
+    Ohne das faellt die Kollision beim Export ersatzlos weg. Sollumz prueft
+    vor dem Schreiben jedes Bound-Meshes (``ybn/ybnexport.py``):
+
+        if obj.type == "MESH" and not validate_collision_materials(obj, ...):
+            return None
+
+    und ``validate_collision_materials`` lehnt zwei Faelle ab: ein Mesh ohne
+    Kollisionsmaterial - und ein Mesh mit einem *Nicht*-Kollisionsmaterial.
+    Beides trifft hier zu: die Kollision entsteht als Kopie des Rendermeshes
+    und bringt dessen Shadermaterial mit.
+
+    Das ``return None`` verwirft den Bound. Uebrig bleibt ein Bound Composite
+    ohne Kinder - eine gueltige, leere Huelle. Die Datei enthaelt einen
+    Kollisionsblock, und man laeuft trotzdem hindurch.
+
+    Sollumz weist Kollisionsmaterialien nirgends automatisch zu; in der
+    Oberflaeche ist das ein eigener Knopf. Wer die Kollision wie hier
+    programmgesteuert erzeugt, muss den Schritt selbst gehen.
+    """
+    try:
+        index = COLLISION_MATERIALS.index(material_name)
+    except ValueError:
+        raise RuntimeError(
+            f"Kollisionsmaterial '{material_name}' ist unbekannt. "
+            f"Verfuegbar sind {len(COLLISION_MATERIALS)} Materialien, darunter: "
+            + ", ".join(COLLISION_MATERIALS[:12]) + " ..."
+        ) from None
+
+    for bound in bound_objs:
+        material = create_collision_material(index)
+        # Ersetzen, nicht ergaenzen: das mitkopierte Shadermaterial ist
+        # genau das, was die Pruefung ablehnt.
+        bound.data.materials.clear()
+        bound.data.materials.append(material)
+
+    # Nachsehen statt hoffen - der Export wuerde den Bound sonst stumm
+    # verwerfen.
+    for bound in bound_objs:
+        mats = list(bound.data.materials)
+        wrong = [m.name for m in mats if m.sollum_type != MaterialType.COLLISION]
+        if not mats or wrong:
+            raise RuntimeError(
+                f"'{bound.name}' traegt nach dem Setzen kein reines "
+                f"Kollisionsmaterial (gefunden: {[m.name for m in mats] or 'keins'}). "
+                "Der Export wuerde die Kollision verwerfen und eine leere Huelle "
+                "schreiben."
+            )
+
+    log(f"  Kollisionsmaterial '{material_name}' (Index {index}) auf "
+        f"{len(bound_objs)} Bound-Mesh(es).")
 
 
 def active_flags(group) -> list[str]:
@@ -977,6 +1048,17 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
     assign_lods(model, lod_meshes)
     retarget_collision(drawable, lod_meshes, job["collision"])
     if job["collision"].get("enabled", True):
+        # Ausserhalb von retarget_collision: das steigt bei abgeschaltetem
+        # oder fehlendem Ziel-LOD frueh aus, und die Kollision braucht
+        # Material und Flags in JEDEM Fall - auch wenn sie aus LOD0 stammt.
+        bound_meshes = find_bound_meshes(drawable)
+        if not bound_meshes:
+            raise RuntimeError(
+                "Kollision ist aktiviert, aber die Konvertierung hat keine "
+                "Bound-Geometrie erzeugt. Der Prop haette im Spiel keine "
+                "Kollision, ohne dass eine Datei fehlt."
+            )
+        apply_collision_material(bound_meshes, job["collision"].get("material", "DEFAULT"))
         apply_collision_flags(drawable, job["collision"].get("flag_preset", "General (Default)"))
     apply_lod_distances(drawable, job["lod_distances"])
 
