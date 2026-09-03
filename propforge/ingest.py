@@ -202,8 +202,80 @@ def extract_textures(gltf: dict, binary: bytes, out_dir: Path, name: str) -> dic
     return written
 
 
+def node_local_matrix(node: dict) -> np.ndarray:
+    """Lokale Transformation eines glTF-Knotens als 4x4-Matrix.
+
+    glTF speichert Matrizen spaltenweise, deshalb die Transposition. Fehlt eine
+    Matrix, wird sie aus Translation, Rotation (Quaternion) und Skalierung
+    zusammengesetzt - in dieser Reihenfolge, wie die Spezifikation es verlangt.
+    """
+    if "matrix" in node:
+        return np.array(node["matrix"], dtype=float).reshape(4, 4).T
+
+    result = np.eye(4)
+
+    if "scale" in node:
+        scale = np.eye(4)
+        scale[:3, :3] = np.diag(node["scale"])
+        result = scale
+
+    if "rotation" in node:
+        x, y, z, w = node["rotation"]  # glTF speichert xyzw
+        rotation = np.eye(4)
+        rotation[:3, :3] = [
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ]
+        result = rotation @ result
+
+    if "translation" in node:
+        translation = np.eye(4)
+        translation[:3, 3] = node["translation"]
+        result = translation @ result
+
+    return result
+
+
+def mesh_instances(gltf: dict) -> list[tuple[int, np.ndarray]]:
+    """Alle Meshes der Szene mit ihrer Welttransformation.
+
+    Ohne diesen Schritt stimmen Abmessungen und Mittelpunkt nicht: Exporte von
+    Fab und Sketchfab haengen die Geometrie unter einen Wurzelknoten, der die
+    Y-up-nach-Z-up-Drehung traegt. Wer nur die rohen Positionen liest, bekommt
+    Hoehe und Tiefe vertauscht -- und empfiehlt dann eine Zentrierung, die auf
+    der falschen Achse rechnet.
+    """
+    nodes = gltf.get("nodes")
+    if not nodes:
+        return [(i, np.eye(4)) for i in range(len(gltf.get("meshes", [])))]
+
+    scene_index = gltf.get("scene", 0)
+    scenes = gltf.get("scenes") or [{"nodes": list(range(len(nodes)))}]
+    roots = scenes[scene_index].get("nodes", list(range(len(nodes))))
+
+    found: list[tuple[int, np.ndarray]] = []
+    stack: list[tuple[int, np.ndarray]] = [(i, np.eye(4)) for i in roots]
+    seen: set[int] = set()
+
+    while stack:
+        index, parent = stack.pop()
+        if index in seen:
+            continue  # Zyklen in fehlerhaften Dateien nicht endlos verfolgen
+        seen.add(index)
+
+        node = nodes[index]
+        world = parent @ node_local_matrix(node)
+        if "mesh" in node:
+            found.append((node["mesh"], world))
+        for child in node.get("children", []):
+            stack.append((child, world))
+
+    return found
+
+
 def geometry(gltf: dict, binary: bytes) -> tuple[np.ndarray, np.ndarray, bool]:
-    """Sammelt Positionen und Dreiecke aller Primitive."""
+    """Sammelt Positionen und Dreiecke aller Primitive, inklusive Knoten-Transformationen."""
     if not gltf.get("meshes"):
         raise IngestError("Die Datei enthaelt kein Mesh.")
 
@@ -212,7 +284,8 @@ def geometry(gltf: dict, binary: bytes) -> tuple[np.ndarray, np.ndarray, bool]:
     has_uvs = True
     offset = 0
 
-    for mesh in gltf["meshes"]:
+    for mesh_index, world in mesh_instances(gltf):
+        mesh = gltf["meshes"][mesh_index]
         for primitive in mesh.get("primitives", []):
             if primitive.get("mode", 4) != 4:
                 continue  # nur Dreiecke
@@ -220,6 +293,10 @@ def geometry(gltf: dict, binary: bytes) -> tuple[np.ndarray, np.ndarray, bool]:
             if "POSITION" not in attributes:
                 continue
             vertices = read_accessor(gltf, binary, attributes["POSITION"]).astype(float)
+            # In Weltkoordinaten bringen: die Knotenkette kann Drehung,
+            # Verschiebung und Skalierung tragen.
+            homogeneous = np.hstack([vertices, np.ones((len(vertices), 1))])
+            vertices = (homogeneous @ world.T)[:, :3]
             if "TEXCOORD_0" not in attributes:
                 has_uvs = False
 

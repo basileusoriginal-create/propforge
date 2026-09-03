@@ -15,11 +15,18 @@ from PIL import Image
 from propforge import ingest
 
 
-def build_glb(with_textures=True, double_sided=False, offset=(0.0, 0.0, 0.0)):
-    """Baut eine minimale, gueltige GLB-Datei im Speicher."""
-    positions = np.array([
+def build_glb(with_textures=True, double_sided=False, offset=(0.0, 0.0, 0.0),
+              scale=(1.0, 1.0, 1.0)):
+    """Baut eine minimale, gueltige GLB-Datei im Speicher.
+
+    `scale` erlaubt eine ungleiche Ausdehnung je Achse - noetig, um eine
+    Drehung ueberhaupt messen zu koennen: ein wuerfelfoermiger Koerper hat
+    nach jeder Achsendrehung dieselben Abmessungen.
+    """
+    positions = (np.array([
         [0, 0, 0], [1, 0, 0], [0, 1, 0], [0, 0, 1],
-    ], dtype=np.float32) + np.array(offset, dtype=np.float32)
+    ], dtype=np.float32) * np.array(scale, dtype=np.float32)
+    ) + np.array(offset, dtype=np.float32)
     indices = np.array([0, 1, 2, 0, 2, 3], dtype=np.uint32)
     uvs = np.zeros((4, 2), dtype=np.float32)
 
@@ -222,3 +229,69 @@ class TestConfigSnippet:
         info, _, _ = ingest.inspect(path, "pf_x")
         snippet = ingest.config_snippet(info, tmp_path / "a" / "x.glb", tmp_path / "a")
         assert 'center = "base"' in snippet
+
+
+class TestNodeTransforms:
+    """Exporte von Fab und Sketchfab haengen die Geometrie unter einen
+    Wurzelknoten, der die Y-up-nach-Z-up-Drehung traegt. Wer nur die rohen
+    Positionen liest, bekommt Hoehe und Tiefe vertauscht -- und empfiehlt eine
+    Zentrierung, die auf der falschen Achse rechnet. Genau das ist passiert:
+    ingest meldete H1.24 m, Blender H0.878 m."""
+
+    IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]
+    # Dieselbe Drehung, die Fab-Exporte mitbringen: (x, y, z) -> (x, z, -y)
+    FAB_ROTATION = [1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 0, 0, 0, 1]
+
+    def _with_root(self, tmp_path, matrix, filename):
+        source = tmp_path / f"src_{filename}"
+        # Ungleiche Ausdehnung, sonst ist eine Drehung nicht messbar.
+        source.write_bytes(build_glb(scale=(1.0, 2.0, 3.0)))
+        gltf, binary = ingest.read_glb(source)
+        gltf["nodes"] = [{"children": [1], "matrix": matrix}, {"mesh": 0}]
+        gltf["scenes"] = [{"nodes": [0]}]
+        gltf["scene"] = 0
+        return ingest.write_slim_glb(gltf, binary, tmp_path / filename)
+
+    def test_identity_keeps_geometry(self, tmp_path):
+        path = self._with_root(tmp_path, self.IDENTITY, "id.glb")
+        info, _, _ = ingest.inspect(path, "pf_x")
+        assert info.triangles == 2
+
+    def test_root_rotation_is_applied(self, tmp_path):
+        plain = self._with_root(tmp_path, self.IDENTITY, "plain.glb")
+        rotated = self._with_root(tmp_path, self.FAB_ROTATION, "rot.glb")
+
+        a, _, _ = ingest.inspect(plain, "a")
+        b, _, _ = ingest.inspect(rotated, "b")
+        # Waere die Matrix ignoriert worden, kaemen identische Abmessungen
+        # heraus - und genau das war der Fehler.
+        assert a.dimensions != b.dimensions
+
+    def test_translation_moves_centre(self, tmp_path):
+        moved = list(self.IDENTITY)
+        moved[12] = 5.0  # Translation X (glTF speichert spaltenweise)
+        info, _, _ = ingest.inspect(self._with_root(tmp_path, moved, "mv.glb"), "pf_x")
+        assert info.center[0] > 4.0
+        assert not info.is_centered
+
+
+class TestNodeMatrix:
+    def test_matrix_is_transposed(self):
+        # glTF speichert spaltenweise. Ohne Transposition ist jede Drehung
+        # gespiegelt.
+        column_major = [1, 0, 0, 0, 0, 0, -1, 0, 0, 1, 0, 0, 7, 8, 9, 1]
+        m = ingest.node_local_matrix({"matrix": column_major})
+        assert list(m[:3, 3]) == [7.0, 8.0, 9.0]
+
+    def test_trs_composition(self):
+        import numpy as np
+
+        node = {"translation": [1, 2, 3], "scale": [2, 2, 2]}
+        m = ingest.node_local_matrix(node)
+        point = np.array([1.0, 0.0, 0.0, 1.0])
+        assert np.allclose((m @ point)[:3], [3.0, 2.0, 3.0])
+
+    def test_identity_for_empty_node(self):
+        import numpy as np
+
+        assert np.allclose(ingest.node_local_matrix({}), np.eye(4))
