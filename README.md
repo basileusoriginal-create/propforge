@@ -23,7 +23,7 @@ automatisierbar. Genau die deckt dieses Repo ab.
 | `jobs` | Prop-Definitionen zu Job-JSON für Blender | überall |
 | `build` | Blender headless: Import, Cleanup, LOD-Kette, Material, Drawable, Kollision, Archetyp (.ytyp), Export | Linux (CWXML) / Windows (NATIVE) |
 | `verify` | liest den Export zurück und gleicht ihn gegen die Konfiguration ab | überall |
-| `pack` | stream/-Ordner plus fxmanifest.lua | überall |
+| `pack` | stream/-Ordner, fxmanifest.lua, Spawn-Helfer für den Test im Spiel | überall |
 
 `propforge run` führt alles nacheinander aus. Es gibt keinen manuellen Schritt
 dazwischen.
@@ -121,6 +121,26 @@ flags = 32                # 32 = "Static", der Normalfall für einen Prop
 # texture_dictionary = "" # Vorgabe: leer, weil die Texturen in der .ydr liegen
 ```
 
+## Test im Spiel
+
+Jede gepackte Resource bringt eine `client.lua` mit — nicht als Komfort,
+sondern als Diagnose:
+
+```
+/pfspawn            spawnt den ersten Prop
+/pfspawn pf_desk    spawnt einen bestimmten
+/pfdelete           räumt wieder auf
+```
+
+Der Befehl unterscheidet die beiden Fehlerbilder, die sich sonst gleich
+anfühlen:
+
+- **„konnte nicht geladen werden"** → das Spiel kennt den Archetyp nicht. Die
+  `.ytyp` ist das Problem, nicht das Modell.
+- **gespawnt, aber nichts zu sehen** → der Archetyp stimmt, die `.ydr` nicht.
+
+Abschaltbar über `spawn_helper = false` im `[pipeline]`-Abschnitt.
+
 ## Tests
 
 ```bash
@@ -128,7 +148,7 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-206 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+216 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
 Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
 die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 

@@ -632,7 +632,7 @@ def export(
     fmt: str,
     version: str,
     ytyp_name: str | None = None,
-) -> None:
+) -> list[dict]:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     select_only(drawable)
@@ -681,6 +681,15 @@ def export(
 
     for path in written:
         log(f"  geschrieben: {path.name} ({path.stat().st_size} Bytes)")
+
+    # Die Dateigroessen wandern in den Ergebnisbericht.
+    #
+    # Grund: dass eine Datei existiert und die richtigen Metadaten hat, heisst
+    # nicht, dass Geometrie drinsteht. Ein Drawable mit tausenden Dreiecken und
+    # drei eingebetteten 1024er-Texturen ist megabytegross - eine leere Huelle
+    # sind ein paar Kilobyte. Der Unterschied faellt sofort auf, ohne dass man
+    # das Binaerformat parsen muss.
+    return [{"file": p.name, "bytes": p.stat().st_size} for p in written]
 
 
 def ensure_lod_materials(
@@ -812,7 +821,7 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
         ytyp_name = create_ytyp(drawable, ytyp_settings)
 
     out_dir = Path(job["output_dir"])
-    export(drawable, out_dir, fmt, version, ytyp_name)
+    files = export(drawable, out_dir, fmt, version, ytyp_name)
     log(f"Export nach {out_dir}")
 
     previews: list[dict] = []
@@ -824,6 +833,7 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
         "previews": previews,
         "dimensions": dimensions,
         "ytyp": ytyp_name,
+        "files": files,
     }
 
 

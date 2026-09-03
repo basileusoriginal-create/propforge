@@ -189,6 +189,11 @@ class PipelineConfig:
     export_format: str = "NATIVE"
     # "GEN8" = klassisches GTA V, "GEN9" = Enhanced-Release.
     export_version: str = "GEN8"
+    # Legt der Resource eine client.lua mit /pfspawn bei. Das ist keine
+    # Bequemlichkeit, sondern Diagnose: der Befehl unterscheidet "das Spiel
+    # kennt den Archetyp nicht" von "das Modell laedt, ist aber unsichtbar" -
+    # zwei Fehler mit voellig verschiedenen Ursachen.
+    spawn_helper: bool = True
 
     @staticmethod
     def load(path: str | Path) -> "PipelineConfig":
@@ -220,6 +225,7 @@ class PipelineConfig:
             props=props,
             export_format=pipeline.get("export_format", "NATIVE").upper(),
             export_version=pipeline.get("export_version", "GEN8").upper(),
+            spawn_helper=bool(pipeline.get("spawn_helper", True)),
         )
 
 

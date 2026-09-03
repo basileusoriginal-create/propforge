@@ -217,7 +217,27 @@ class TestVerifyPipeline:
         build = tmp_path / "build" / "pf_crate"
         build.mkdir(parents=True)
         write_ydr(build)
-        assert pf_verify.verify(self._config(tmp_path), tmp_path / "build") == []
+        found = pf_verify.verify(self._config(tmp_path), tmp_path / "build")
+        # Die Fixture ist naturgemaess winzig, deshalb schlaegt die
+        # Groessenpruefung an. Inhaltlich muss der Export sauber sein.
+        assert codes(found) == {"drawable_suspiciously_small"}
+
+    def test_small_drawable_flagged(self, tmp_path):
+        build = tmp_path / "build"
+        build.mkdir()
+        write_ydr(build)
+        found = pf_verify.verify(self._config(tmp_path), build)
+        assert "drawable_suspiciously_small" in codes(found, Level.WARNING)
+
+    def test_large_drawable_not_flagged(self, tmp_path):
+        build = tmp_path / "build"
+        build.mkdir()
+        path = write_ydr(build)
+        # Auffuellen bis ueber die Schwelle - ohne das XML zu zerstoeren.
+        padding = " " * (pf_verify.MIN_DRAWABLE_BYTES + 1)
+        path.write_text(path.read_text() + f"<!--{padding}-->", encoding="utf-8")
+        assert "drawable_suspiciously_small" not in codes(
+            pf_verify.verify(self._config(tmp_path), build))
 
     def test_missing_export_flagged(self, tmp_path):
         (tmp_path / "build").mkdir()

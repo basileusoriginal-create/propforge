@@ -30,6 +30,12 @@ def describe(prop: dict) -> list[str]:
     ytyp = prop.get("ytyp")
     lines.append(f"  ytyp: {ytyp}" if ytyp else "  ytyp: keine")
 
+    # Dateigroessen. Eine gueltige Datei ohne Geometrie ist der teuerste stille
+    # Fehler dieser Kette - an der Groesse faellt er sofort auf.
+    for entry in prop.get("files", []):
+        size = entry.get("bytes", 0)
+        lines.append(f"  Datei {entry.get('file', '?')}  {size / 1024:.0f} KiB")
+
     for entry in prop.get("previews", []):
         lines.append(
             f"  LOD {entry.get('lod', '?'):<8} "

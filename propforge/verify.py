@@ -15,6 +15,14 @@ from .validate import Finding, Level
 # Wie stark die exportierte Sichtweite vom Sollwert abweichen darf.
 DISTANCE_TOLERANCE = 0.5
 
+# Ab wann eine exportierte Drawable-Datei nach leerer Huelle aussieht.
+#
+# Ein Prop mit ein paar tausend Dreiecken und eingebetteten Texturen liegt im
+# Megabyte-Bereich - egal ob binaer oder als CWXML. Wenige Kilobyte heissen:
+# die Datei ist formal in Ordnung, aber es steht nichts drin. Genau diese
+# Sorte Fehler kommt sonst erst im Spiel heraus, als unsichtbarer Prop.
+MIN_DRAWABLE_BYTES = 8 * 1024
+
 # Erwartete Samplernamen je Texturrolle.
 ROLE_SAMPLERS = {"_d": "DiffuseSampler", "_n": "BumpSampler", "_s": "SpecSampler"}
 
@@ -201,6 +209,7 @@ def verify(config: PipelineConfig, build_dir: Path | None = None) -> list[Findin
         if not matches:
             binary = list(build_dir.rglob(f"{spec.name}.ydr"))
             if binary:
+                findings.extend(_verify_size(spec, binary[0]))
                 findings.append(Finding(
                     Level.INFO, "binary_export_not_inspectable",
                     f"'{spec.name}.ydr' liegt als Binaerdatei vor. Automatische Pruefung "
@@ -214,6 +223,7 @@ def verify(config: PipelineConfig, build_dir: Path | None = None) -> list[Findin
                     prop=spec.name,
                 ))
         else:
+            findings.extend(_verify_size(spec, matches[0]))
             try:
                 info = parse_drawable(matches[0])
             except InspectError as exc:
@@ -225,6 +235,27 @@ def verify(config: PipelineConfig, build_dir: Path | None = None) -> list[Findin
         findings.extend(_verify_ytyp_file(spec, build_dir, info))
 
     return findings
+
+
+def _verify_size(spec: PropSpec, path: Path) -> list[Finding]:
+    """Groessenpruefung der exportierten Drawable-Datei.
+
+    Die inhaltliche Pruefung zaehlt Elemente - Geometrien, LOD-Stufen, Sampler.
+    Sie sagt nichts darueber, ob in diesen Elementen auch Vertexdaten stehen.
+    Eine Datei von wenigen Kilobyte kann jede Strukturpruefung bestehen und im
+    Spiel trotzdem unsichtbar sein. Die Groesse deckt genau diese Luecke ab,
+    ohne dass das Binaerformat geparst werden muss.
+    """
+    size = path.stat().st_size
+    if size >= MIN_DRAWABLE_BYTES:
+        return []
+    return [Finding(
+        Level.WARNING, "drawable_suspiciously_small",
+        f"'{path.name}' ist nur {size} Bytes gross. Ein Prop mit Geometrie und "
+        f"eingebetteten Texturen liegt weit darueber - das sieht nach einer "
+        "leeren Huelle aus, die im Spiel unsichtbar waere.",
+        prop=spec.name,
+    )]
 
 
 def _verify_ytyp_file(

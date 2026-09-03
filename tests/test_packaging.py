@@ -78,3 +78,53 @@ class TestManifestRendering:
         manifest = packaging.render_manifest("r", "a", [], [])
         assert "fx_version" in manifest
         assert "data_file" not in manifest
+
+    def test_client_script_only_with_helper(self):
+        assert "client_script" not in packaging.render_manifest("r", "a", [], [])
+        assert "client_script 'client.lua'" in packaging.render_manifest(
+            "r", "a", [], [], spawn_helper=True)
+
+
+class TestSpawnHelper:
+    def test_lists_prop_names(self):
+        lua = packaging.render_spawn_helper(["pf_drum", "pf_crate"])
+        assert 'local PROPS = { "pf_crate", "pf_drum" }' in lua
+
+    def test_registers_both_commands(self):
+        lua = packaging.render_spawn_helper(["pf_crate"])
+        assert 'RegisterCommand("pfspawn"' in lua
+        assert 'RegisterCommand("pfdelete"' in lua
+
+    def test_distinguishes_the_two_failure_modes(self):
+        # Der ganze Sinn des Helfers: "Modell laedt nicht" und "Modell laedt,
+        # ist aber unsichtbar" haben verschiedene Ursachen und muessen
+        # verschieden gemeldet werden.
+        lua = packaging.render_spawn_helper(["pf_crate"])
+        assert "Archetyp nicht" in lua
+        assert "Modell das Problem" in lua
+
+    def test_no_leftover_format_placeholders(self):
+        # Das Lua-Template geht durch %-Formatierung. Ein vergessenes %% waere
+        # ein Syntaxfehler, der erst auf dem Server auffiele.
+        lua = packaging.render_spawn_helper(["pf_crate"])
+        assert "%(props)s" not in lua
+        assert "%%" not in lua
+
+    def test_written_into_resource(self, build_dir, tmp_path):
+        report = packaging.build_resource(build_dir, tmp_path / "res", "pf_pack", "Nick")
+        lua = (report.root / "client.lua").read_text()
+        assert "pf_crate" in lua and "pf_drum" in lua
+        assert "client_script 'client.lua'" in (report.root / "fxmanifest.lua").read_text()
+
+    def test_can_be_switched_off(self, build_dir, tmp_path):
+        report = packaging.build_resource(
+            build_dir, tmp_path / "res", "pf_pack", "Nick", spawn_helper=False)
+        assert not (report.root / "client.lua").exists()
+        assert "client_script" not in (report.root / "fxmanifest.lua").read_text()
+
+    def test_no_helper_without_drawables(self, tmp_path):
+        build = tmp_path / "build"
+        build.mkdir()
+        (build / "props.ytyp").write_bytes(b"ytyp")
+        report = packaging.build_resource(build, tmp_path / "res", "pf_pack", "Nick")
+        assert not (report.root / "client.lua").exists()

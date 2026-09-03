@@ -171,9 +171,14 @@ def cmd_pack(args: argparse.Namespace) -> int:
         out_root=config.workdir / "resources",
         resource_name=config.resource_name,
         author=config.author,
+        spawn_helper=config.spawn_helper,
+        prop_names=[p.name for p in config.props],
     )
     print(report.summary())
     print(f"\nResource: {report.root}")
+    if config.spawn_helper:
+        print("Im Spiel testen: Resource starten, dann /pfspawn "
+              f"{config.props[0].name if config.props else ''}".rstrip())
     return 0
 
 
