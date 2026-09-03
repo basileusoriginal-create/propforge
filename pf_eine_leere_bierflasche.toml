@@ -1,0 +1,19 @@
+[[prop]]
+name = "pf_eine_leere_bierflasche"
+mesh = "assets/pf_eine_leere_bierflasche.glb"
+# Groessenklasse: setzt Dreiecksbudget, Texturgroesse und Sichtweiten.
+# clutter | standard | detailed | hero
+profile = "standard"
+# glTF ist per Spezifikation Y-up.
+source_up = "y"
+
+[prop.collision]
+# Bestimmt Schrittgeraeusche, Einschlaege und Bruchverhalten.
+# Ohne Kollisionsmaterial verwirft der Export die Kollision.
+material = "GLASS_SHOOT_THROUGH"
+
+[prop.textures]
+diffuse = "assets/pf_eine_leere_bierflasche_albedo.png"
+roughness = "assets/pf_eine_leere_bierflasche_roughness.png"
+metallic = "assets/pf_eine_leere_bierflasche_metallic.png"
+normal = "assets/pf_eine_leere_bierflasche_normal.png"

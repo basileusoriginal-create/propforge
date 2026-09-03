@@ -37,19 +37,66 @@ from typing import Any, Callable
 
 TRIPO_BASE = "https://openapi.tripo3d.ai/v3"
 
-# Bewusst ohne festgeschriebene Modellversion.
+# Die Modellversion ist PFLICHT - das hat der erste echte Aufruf gezeigt:
 #
-# Die Doku zeigt "v3.1-20260211". So eine Konstante veraltet still: sie
-# bleibt gueltig, waehrend der Dienst laengst bessere Modelle anbietet.
-# Ohne Angabe nimmt Tripo seine eigene Vorgabe - wer eine bestimmte Version
-# braucht, setzt sie ausdruecklich.
-KNOWN_MODEL_VERSION = "v3.1-20260211"
+#   HTTP 400 {"code":1004,"message":"model is required, allowed values:
+#             P1-20260311, P2-20260801, v2.5-20250123, v3.0-20250812,
+#             v3.1-20260211"}
+#
+# Ich hatte das Feld weggelassen, damit keine Konstante still veraltet. Der
+# Dienst sieht das anders. Immerhin nennt er die gueltigen Werte selbst -
+# genau das faengt `explain_api_error` unten ab und reicht es weiter.
+#
+# P1 als Vorgabe, nicht P2: P1 ist schneller und billiger, und fuer
+# Hintergrund- und Einrichtungs-Props reicht die Qualitaet. P2 bringt
+# sauberere Texturen im Nahbereich und Quad-Topologie - dafuer teurer.
+# Umschalten mit --model.
+DEFAULT_MODEL = "P1-20260311"
+BETTER_MODEL = "P2-20260801"
 
 # Die Ergebnis-URL laeuft laut Tripo nach fuenf Minuten ab. Nach dem Abschluss
 # wird deshalb sofort geladen, nicht spaeter.
 URL_LIFETIME_SECONDS = 300
 
 GLB_MAGIC = b"glTF"
+
+
+def load_env_file(path: Path) -> dict[str, str]:
+    """Liest eine schlichte KEY=VALUE-Datei.
+
+    Damit der Schluessel an einer Stelle liegen kann, ohne ihn bei jedem
+    Terminal neu zu setzen. Die Datei steht in der .gitignore: das Repo ist
+    oeffentlich, ein eingecheckter Schluessel waere sofort fuer alle sichtbar.
+
+    Bewusst ohne Zusatzbibliothek und ohne Kunststuecke - keine
+    Variablenersetzung, keine Mehrzeiligkeit. Wer mehr braucht, nimmt
+    Umgebungsvariablen.
+    """
+    if not path.is_file():
+        return {}
+
+    values: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+def find_token(explicit: str | None = None, env_file: Path | None = None) -> str | None:
+    """Schluessel suchen: Aufrufparameter, dann Umgebung, dann .env-Datei."""
+    import os
+
+    if explicit:
+        return explicit
+    from_env = os.environ.get("TRIPO_API_KEY")
+    if from_env:
+        return from_env
+
+    path = env_file or Path(__file__).resolve().parent.parent / ".env"
+    return load_env_file(path).get("TRIPO_API_KEY")
 
 
 class GenerationError(RuntimeError):
@@ -73,14 +120,14 @@ class GenerationRequest:
     def payload(self) -> dict[str, Any]:
         body: dict[str, Any] = {
             "prompt": self.prompt,
+            # Pflichtfeld. Ohne Modellversion lehnt Tripo den Auftrag ab.
+            "model": self.model_version or DEFAULT_MODEL,
             "texture": self.texture,
             "pbr": self.pbr,
             "texture_quality": self.texture_quality,
         }
         if self.face_limit:
             body["face_limit"] = int(self.face_limit)
-        if self.model_version:
-            body["model"] = self.model_version
         return body
 
 
@@ -98,6 +145,38 @@ class TaskState:
     @property
     def succeeded(self) -> bool:
         return self.status == "success"
+
+
+def explain_api_error(status: int, detail: str) -> str:
+    """Macht aus der Antwort des Dienstes eine brauchbare Meldung.
+
+    Tripo schickt bei Fehlern ein JSON mit `message` und oft `suggestion` -
+    und nennt bei ungueltigen Aufzaehlungswerten die gueltigen gleich mit.
+    Das ist mehr wert als der rohe Rumpf: wenn eine Modellversion eines Tages
+    zurueckgezogen wird, steht die Antwort auf "was jetzt?" in der
+    Fehlermeldung selbst.
+    """
+    try:
+        body = json.loads(detail)
+    except (ValueError, TypeError):
+        return f"HTTP {status}: {detail}"
+
+    message = body.get("message") or body.get("msg") or detail
+    lines = [f"HTTP {status}: {message}"]
+
+    if "allowed values" in str(message):
+        _, _, allowed = str(message).partition("allowed values:")
+        values = [v.strip() for v in allowed.split(",") if v.strip()]
+        if values:
+            lines.append("Moegliche Werte laut Dienst: " + ", ".join(values))
+            lines.append(f"Mit --model setzen, z.B. --model {values[0]}")
+
+    suggestion = body.get("suggestion")
+    if suggestion:
+        lines.append(str(suggestion))
+    if body.get("request_id"):
+        lines.append(f"request_id: {body['request_id']}")
+    return "\n  ".join(lines)
 
 
 def http_json(
@@ -119,9 +198,8 @@ def http_json(
         with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")[:400]
-        raise GenerationError(
-            f"{method} {url} antwortete mit HTTP {exc.code}: {detail}") from exc
+        detail = exc.read().decode("utf-8", errors="replace")[:800]
+        raise GenerationError(explain_api_error(exc.code, detail)) from exc
     except urllib.error.URLError as exc:
         raise GenerationError(f"{method} {url} nicht erreichbar: {exc.reason}") from exc
 

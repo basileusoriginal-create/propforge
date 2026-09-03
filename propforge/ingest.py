@@ -436,8 +436,24 @@ def _relative(path: Path, texture_dir: Path) -> Path:
         return Path(path)
 
 
+def suggest_profile(triangles: int) -> str:
+    """Groessenklasse aus der Dreieckszahl ableiten.
+
+    Nur ein Vorschlag: die Zahl sagt nichts darueber, wie gross das Objekt
+    in der Welt ist oder wie nah man herangeht. Wer es besser weiss,
+    ueberschreibt die Zeile.
+    """
+    from .config import PROFILES
+
+    for name in ("clutter", "standard", "detailed", "hero"):
+        if triangles <= PROFILES[name].max_tris:
+            return name
+    return "hero"
+
+
 def config_snippet(info: AssetInfo, mesh_path: Path, texture_dir: Path,
-                   collision_material: str | None = None) -> str:
+                   collision_material: str | None = None,
+                   profile: str | None = None) -> str:
     """Erzeugt den [[prop]]-Block fuer die pipeline.toml.
 
     Pfade sind relativ zum Elternverzeichnis des Asset-Ordners - dort liegt die
@@ -447,9 +463,11 @@ def config_snippet(info: AssetInfo, mesh_path: Path, texture_dir: Path,
         "[[prop]]",
         f'name = "{info.name}"',
         f'mesh = "{_relative(mesh_path, texture_dir).as_posix()}"',
+        '# Groessenklasse: setzt Dreiecksbudget, Texturgroesse und Sichtweiten.',
+        '# clutter | standard | detailed | hero',
+        f'profile = "{profile or suggest_profile(info.triangles)}"',
         '# glTF ist per Spezifikation Y-up.',
         'source_up = "y"',
-        f"max_tris = {max(2000, info.triangles)}",
     ]
     if not info.is_centered:
         lines.append('# Ursprung lag ausserhalb des Objekts.')
@@ -462,6 +480,12 @@ def config_snippet(info: AssetInfo, mesh_path: Path, texture_dir: Path,
         lines.append(f'material = "{collision_material}"')
     lines.append("")
     lines.append("[prop.textures]")
+    if not info.textures:
+        # Ein leerer Block scheitert erst im Preflight mit "Eintrag
+        # unvollstaendig" - das sagt nicht, was zu tun ist.
+        lines.append("# Die Datei hatte keine eingebetteten Texturen.")
+        lines.append("# Mindestens 'diffuse' eintragen, sonst bricht der Preflight ab.")
+        lines.append('# diffuse = "assets/DEINE_TEXTUR.png"')
     base = Path(texture_dir).parent
     for role, path in info.textures.items():
         candidate = Path(path)

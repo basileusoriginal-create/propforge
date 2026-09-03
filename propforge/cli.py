@@ -10,6 +10,12 @@
     propforge ingest    modell.glb        GLB einlesen, Konfiguration erzeugen
     propforge materials [begriff]         Kollisionsmaterialien nachschlagen
     propforge generate  "ein Holztisch"   Mesh erzeugen lassen und einlesen
+
+Lokale Routine ueber Ordner (kein Bearbeiten von Konfigurationsdateien):
+
+    propforge init                        Arbeitsordner anlegen
+    propforge batch                       mehrere Assets erfragen und erzeugen
+    propforge convert                     alles im Eingang zu GTA-Dateien machen
 """
 
 from __future__ import annotations
@@ -28,12 +34,22 @@ from . import ingest as pf_ingest
 from . import inspect as pf_inspect
 from . import packaging, preview as pf_preview, textures, validate
 from . import verify as pf_verify
+from . import workspace as pf_workspace
+from . import config as pf_config
 from .config import PipelineConfig
 from .validate import Level
 
 
-def _load(path: str) -> PipelineConfig:
-    return PipelineConfig.load(path)
+def _load(path_or_config) -> PipelineConfig:
+    """Laedt aus einer Datei - oder reicht eine fertige Konfiguration durch.
+
+    Damit koennen die Stufen unveraendert auch auf einer Konfiguration
+    arbeiten, die aus den Begleitdateien im Arbeitsordner entstanden ist,
+    statt aus einer pipeline.toml.
+    """
+    if isinstance(path_or_config, PipelineConfig):
+        return path_or_config
+    return PipelineConfig.load(path_or_config)
 
 
 def _report(findings: list[validate.Finding]) -> int:
@@ -285,17 +301,209 @@ def cmd_materials(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- Lokale Routine ---------------------------------------------------------
+
+def _ask(prompt: str, default: str | None = None) -> str:
+    hint = f" [{default}]" if default else ""
+    answer = input(f"{prompt}{hint}> ").strip()
+    return answer or (default or "")
+
+
+def _ask_profile(default: str) -> str:
+    while True:
+        answer = _ask("  Kategorie (" + " | ".join(pf_config.PROFILES) + ")", default).lower()
+        if answer in pf_config.PROFILES:
+            return answer
+        print(f"  '{answer}' gibt es nicht.")
+
+
+def _ask_material(name: str) -> str:
+    suggestion, keyword = pf_materials.suggest(name)
+    why = f", wegen '{keyword}'" if keyword else ""
+    while True:
+        answer = _ask(f"  Kollisionsmaterial ('?' sucht{why})", suggestion)
+        if answer.startswith("?"):
+            for m in pf_materials.search(answer.lstrip("? ").strip())[:20]:
+                print(f"    {m.name:<28} {m.usage}")
+            continue
+        if answer.upper() in pf_materials.BY_NAME:
+            return answer.upper()
+        print(f"  '{answer}' gibt es nicht - mit '?{answer}' suchen.")
+
+
+def cmd_init(args: argparse.Namespace) -> int:
+    """Legt die Arbeitsordner und die Vorlage an."""
+    workspace = pf_workspace.Workspace.load(args.root)
+    workspace.ensure()
+
+    config = workspace.root / pf_workspace.WORKSPACE_FILE
+    if config.exists():
+        print(f"{config.name} existiert bereits - unveraendert gelassen.")
+    else:
+        config.write_text(workspace.render_config(), encoding="utf-8")
+        print(f"Vorlage geschrieben: {config}")
+
+    print(f"\n  Eingang  {workspace.inbox}")
+    print(f"  Fertig   {workspace.done}")
+    print(f"  Ausgabe  {workspace.out}")
+    print("\nGLBs in den Eingang legen oder mit 'propforge batch' erzeugen,")
+    print("dann 'propforge convert'.")
+    return 0
+
+
+def cmd_batch(args: argparse.Namespace) -> int:
+    """Fragt mehrere Assets ab und erzeugt sie in einem Rutsch."""
+    workspace = pf_workspace.Workspace.load(args.root)
+    workspace.ensure()
+
+    token = pf_generate.find_token(args.api_key)
+    if not token:
+        print("Kein API-Schluessel - siehe 'propforge generate --help'.", file=sys.stderr)
+        return 2
+
+    print("Was soll erzeugt werden? Leere Zeile beendet die Eingabe.\n")
+    wishes: list[tuple[str, str, str]] = []
+    while True:
+        prompt = _ask(f"Asset {len(wishes) + 1}")
+        if not prompt:
+            break
+        name = "pf_" + "".join(
+            c for c in "_".join(prompt.lower().split()[:3]) if c.isalnum() or c == "_")
+        profile = _ask_profile(args.profile or pf_config.DEFAULT_PROFILE)
+        material = _ask_material(name)
+        wishes.append((prompt, profile, material))
+        print()
+
+    if not wishes:
+        print("Nichts angefordert.")
+        return 0
+
+    print(f"\n{len(wishes)} Asset(s) werden erzeugt. Abbruch mit Strg+C.\n")
+    provider = pf_generate.TripoProvider(token=token)
+    failed = 0
+
+    for index, (prompt, profile_name, material) in enumerate(wishes, 1):
+        profile = pf_config.PROFILES[profile_name]
+        name = "pf_" + "".join(
+            c for c in "_".join(prompt.lower().split()[:3]) if c.isalnum() or c == "_")
+        target = workspace.inbox / f"{name}.glb"
+        if target.exists():
+            target = pf_workspace._free_name(target)
+
+        print(f"[{index}/{len(wishes)}] {name}  ({profile_name}, {material})")
+        request = pf_generate.GenerationRequest(
+            prompt=prompt, name=name, face_limit=profile.max_tris,
+            model_version=args.model)
+        try:
+            provider.run(
+                request, target,
+                on_progress=lambda s: print(f"      {s.status:<10} {s.progress:3d} %"),
+                timeout=args.timeout,
+            )
+        except pf_generate.GenerationError as exc:
+            print(f"      fehlgeschlagen: {exc}", file=sys.stderr)
+            failed += 1
+            continue
+
+        pf_workspace.Job(
+            name=target.stem, mesh=target, profile=profile_name,
+            material=material, prompt=prompt,
+            model=args.model or pf_generate.DEFAULT_MODEL,
+        ).write()
+        print(f"      -> {target.name} ({target.stat().st_size / 1024:.0f} KiB)")
+
+    done = len(wishes) - failed
+    print(f"\n{done}/{len(wishes)} erzeugt -> {workspace.inbox}")
+    if done:
+        print("Weiter mit: propforge convert")
+    return 1 if failed else 0
+
+
+def cmd_convert(args: argparse.Namespace) -> int:
+    """Wandelt alles im Eingang in GTA-Dateien um."""
+    workspace = pf_workspace.Workspace.load(args.root)
+    workspace.ensure()
+
+    jobs = workspace.jobs()
+    if not jobs:
+        print(f"Der Eingang ist leer: {workspace.inbox}\n"
+              "GLBs dorthin kopieren oder mit 'propforge batch' erzeugen.")
+        return 0
+
+    blender = args.blender or workspace.blender
+    if not blender:
+        print("Blender nicht gesetzt. Entweder --blender angeben oder in der "
+              f"{pf_workspace.WORKSPACE_FILE} eintragen.", file=sys.stderr)
+        return 2
+
+    print(f"{len(jobs)} Asset(s) im Eingang:")
+    for job in jobs:
+        print(f"  {job.name:<28} {job.profile:<9} {job.material}")
+    print()
+
+    # Texturen aus den Meshes holen und die Begleitdaten vervollstaendigen.
+    prepared: list[pf_workspace.Job] = []
+    for job in jobs:
+        if job.textures:
+            prepared.append(job)
+            continue
+        try:
+            info, _, _ = pf_ingest.inspect(job.mesh, job.name)
+            gltf, binary = pf_ingest.read_glb(job.mesh)
+            written = pf_ingest.extract_textures(gltf, binary, workspace.inbox, job.name)
+        except Exception as exc:  # noqa: BLE001 - ein kaputtes Mesh darf den Stapel nicht stoppen
+            print(f"  {job.name}: Texturen nicht lesbar ({exc})", file=sys.stderr)
+            prepared.append(job)
+            continue
+
+        job.textures = {role: str(path) for role, path in written.items()}
+        if info.center != (0.0, 0.0, 0.0) and not info.is_centered:
+            job.center = "base"
+        job.write()
+        prepared.append(job)
+
+    config = _load(workspace.to_config(prepared, export_format=args.format))
+
+    stage_args = argparse.Namespace(config=config, blender=blender, texconv=args.texconv)
+    for step in (cmd_validate, cmd_textures, cmd_build, cmd_verify, cmd_pack):
+        code = step(stage_args)
+        if code:
+            print("\nAbgebrochen - die Assets bleiben im Eingang liegen.", file=sys.stderr)
+            return code
+
+    # Erst jetzt archivieren: was nicht gebaut wurde, soll beim naechsten
+    # Lauf wieder drankommen und nicht im Archiv verschwinden.
+    for job in prepared:
+        workspace.archive(job)
+
+    print(f"\n{len(prepared)} Asset(s) fertig -> {workspace.out}")
+    print(f"Verarbeitete Meshes liegen jetzt in {workspace.done}")
+    return 0
+
+
 def cmd_generate(args: argparse.Namespace) -> int:
     """Laesst ein Mesh erzeugen und reicht es direkt an ingest weiter."""
-    import os
-
     name = args.name or "pf_" + "_".join(args.prompt.lower().split()[:3])
     name = "".join(c for c in name if c.isalnum() or c == "_")
+
+    # Budget schon beim Generator setzen statt hinterher wegzuschneiden.
+    # Der Generator kennt die Form und weiss besser, wo Kanten entbehrlich
+    # sind, als ein blinder Reduktionsalgorithmus.
+    profile = pf_config.PROFILES.get(args.profile)
+    if profile is None:
+        print(f"Unbekanntes Profil '{args.profile}'. Moeglich: "
+              + ", ".join(pf_config.PROFILES), file=sys.stderr)
+        return 2
+    face_limit = args.face_limit if args.face_limit is not None else profile.max_tris
+    max_texture = args.max_texture if args.max_texture is not None else profile.texture_size
+
+    print(f"Profil '{profile.name}': bis {profile.max_tris} Dreiecke, "
+          f"{profile.texture_size} px Textur - {profile.usage}")
 
     request = pf_generate.GenerationRequest(
         prompt=args.prompt,
         name=name,
-        face_limit=args.face_limit,
+        face_limit=face_limit,
         pbr=not args.no_pbr,
         model_version=args.model,
     )
@@ -304,12 +512,19 @@ def cmd_generate(args: argparse.Namespace) -> int:
         print(pf_generate.describe_request(request))
         return 0
 
-    token = args.api_key or os.environ.get("TRIPO_API_KEY")
+    token = pf_generate.find_token(args.api_key)
     if not token:
         print(
-            "Kein API-Schluessel. Setze TRIPO_API_KEY oder gib --api-key an.\n"
-            "Schluessel gibt es unter https://platform.tripo3d.ai (Pay-as-you-go,\n"
-            "kein Abo; Text-zu-3D mit Textur kostet 20 Credits = 0,20 USD).\n"
+            "Kein API-Schluessel gefunden. Drei Wege, einer reicht:\n"
+            "\n"
+            "  1. Datei '.env' im Repo-Ordner anlegen, eine Zeile:\n"
+            "       TRIPO_API_KEY=tsk_...\n"
+            "     (steht in der .gitignore - landet also nicht im oeffentlichen Repo)\n"
+            "  2. Dauerhaft in Windows setzen, danach ein NEUES Terminal oeffnen:\n"
+            "       setx TRIPO_API_KEY \"tsk_...\"\n"
+            "  3. Nur fuer diesen Aufruf:  --api-key tsk_...\n"
+            "\n"
+            "Schluessel: https://platform.tripo3d.ai - Pay-as-you-go, kein Abo.\n"
             "Ohne Schluessel zeigt --dry-run, was abgeschickt wuerde.",
             file=sys.stderr,
         )
@@ -335,7 +550,11 @@ def cmd_generate(args: argparse.Namespace) -> int:
     # dasselbe Format, das die Pipeline ohnehin erwartet.
     ingest_args = argparse.Namespace(
         source=str(target), out=args.out, name=name,
-        max_texture=args.max_texture, material=args.material,
+        # Das Profil muss mit: sonst schaetzt ingest die Groessenklasse neu
+        # aus der Dreieckszahl und ueberschreibt die ausdrueckliche Wahl.
+        # Wer 'clutter' verlangt hat, bekam so 'standard' in die Konfiguration.
+        profile=profile.name,
+        max_texture=max_texture, material=args.material,
     )
     return cmd_ingest(ingest_args)
 
@@ -349,6 +568,16 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     info, _, _ = pf_ingest.inspect(source, name)
     gltf, binary = pf_ingest.read_glb(source)
     written = pf_ingest.extract_textures(gltf, binary, out_dir, name)
+
+    # Texturgrenze aus dem Profil. Ohne Angabe wird die Groessenklasse aus
+    # der Dreieckszahl geschaetzt - dasselbe, was auch im erzeugten
+    # Konfigurationsblock steht.
+    profile_name = getattr(args, "profile", None) or pf_ingest.suggest_profile(info.triangles)
+    profile = pf_config.PROFILES.get(profile_name, pf_config.PROFILES[pf_config.DEFAULT_PROFILE])
+    limit = getattr(args, "max_texture", None) or profile.texture_size
+    print(f"Profil '{profile.name}' ({info.triangles} Dreiecke): "
+          f"Texturen auf {limit} px begrenzt.")
+    args.max_texture = limit
 
     if args.max_texture:
         from PIL import Image
@@ -375,7 +604,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     print(f"\nGeometrie: {before:.1f} MB -> {after:.1f} MB (Texturen ausgelagert)")
 
     material = choose_collision_material(name, source, args.material)
-    snippet = pf_ingest.config_snippet(info, mesh_target, out_dir, material)
+    snippet = pf_ingest.config_snippet(info, mesh_target, out_dir, material, profile.name)
     snippet_path = out_dir.parent / f"{name}.toml"
     snippet_path.write_text(snippet, encoding="utf-8")
 
@@ -420,12 +649,15 @@ def main(argv: list[str] | None = None) -> int:
         p.set_defaults(func=fn)
 
     # ingest arbeitet auf einer Quelldatei, nicht auf einer Konfiguration.
-    p = sub.add_parser("ingest", help="GLB einlesen: Texturen entpacken, Konfiguration erzeugen")
+    p = sub.add_parser("ingest", help="Fertiges GLB einlesen (ohne Generator)")
     p.add_argument("source", help="Pfad zur .glb-Datei")
     p.add_argument("--out", default="assets", help="Zielverzeichnis")
     p.add_argument("--name", help="Prop-Name (Standard: Dateiname)")
-    p.add_argument("--max-texture", type=int, default=2048,
-                   help="Texturen auf diese Kantenlaenge begrenzen")
+    p.add_argument("--profile", default=None,
+                   help="Groessenklasse fuer die Texturgrenze: "
+                        + ", ".join(pf_config.PROFILES) + " (Standard: aus der Dreieckszahl)")
+    p.add_argument("--max-texture", type=int,
+                   help="Texturen begrenzen (Standard: aus dem Profil)")
     p.add_argument("--material", help="Kollisionsmaterial; ohne Angabe wird gefragt")
     p.set_defaults(func=cmd_ingest)
 
@@ -434,18 +666,42 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("prompt", help="Beschreibung des gewuenschten Objekts")
     p.add_argument("--name", help="Prop-Name (Standard: aus dem Prompt)")
     p.add_argument("--out", default="assets", help="Zielverzeichnis")
-    p.add_argument("--face-limit", type=int, default=8000,
-                   help="Dreiecksobergrenze schon beim Generator (0 = ohne)")
+    p.add_argument("--profile", default=pf_config.DEFAULT_PROFILE,
+                   help="Groessenklasse: " + ", ".join(pf_config.PROFILES))
+    p.add_argument("--face-limit", type=int,
+                   help="Dreiecksobergrenze (Standard: aus dem Profil)")
     p.add_argument("--no-pbr", action="store_true", help="ohne PBR-Texturen erzeugen")
-    p.add_argument("--model", help=f"Modellversion festnageln, z.B. {pf_generate.KNOWN_MODEL_VERSION}")
+    p.add_argument("--model", default=None,
+                   help=f"Modellversion (Standard: {pf_generate.DEFAULT_MODEL}; "
+                        f"{pf_generate.BETTER_MODEL} = bessere Texturen, teurer)")
     p.add_argument("--api-key", help="Statt der Umgebungsvariablen TRIPO_API_KEY")
     p.add_argument("--timeout", type=float, default=900.0, help="Wartezeit in Sekunden")
-    p.add_argument("--max-texture", type=int, default=2048,
-                   help="Texturen auf diese Kantenlaenge begrenzen")
+    p.add_argument("--max-texture", type=int,
+                   help="Texturen begrenzen (Standard: aus dem Profil)")
     p.add_argument("--material", help="Kollisionsmaterial; ohne Angabe wird gefragt")
     p.add_argument("--dry-run", action="store_true",
                    help="nur zeigen, was abgeschickt wuerde")
     p.set_defaults(func=cmd_generate)
+
+    # Lokale Routine: init / batch / convert.
+    p = sub.add_parser("init", help="Arbeitsordner anlegen")
+    p.add_argument("--root", default=".", help="Wurzel des Arbeitsordners")
+    p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("batch", help="Mehrere Assets erfragen und erzeugen")
+    p.add_argument("--root", default=".", help="Wurzel des Arbeitsordners")
+    p.add_argument("--profile", help="Vorgabe fuer die Kategorie-Abfrage")
+    p.add_argument("--model", help=f"Modellversion (Standard: {pf_generate.DEFAULT_MODEL})")
+    p.add_argument("--api-key", help="Statt der Umgebungsvariablen TRIPO_API_KEY")
+    p.add_argument("--timeout", type=float, default=900.0, help="Wartezeit je Asset")
+    p.set_defaults(func=cmd_batch)
+
+    p = sub.add_parser("convert", help="Alles im Eingang zu GTA-Dateien machen")
+    p.add_argument("--root", default=".", help="Wurzel des Arbeitsordners")
+    p.add_argument("--blender", help="Pfad zur Blender-Binary")
+    p.add_argument("--texconv", help="Pfad zu texconv.exe")
+    p.add_argument("--format", default="NATIVE", choices=["NATIVE", "CWXML"])
+    p.set_defaults(func=cmd_convert)
 
     # materials braucht weder Konfiguration noch Quelldatei.
     p = sub.add_parser("materials", help="Kollisionsmaterialien nachschlagen")

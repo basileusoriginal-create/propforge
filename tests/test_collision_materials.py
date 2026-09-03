@@ -135,6 +135,105 @@ class TestValidation:
         assert "collision_material_unknown" not in codes(pf_validate.validate_prop(spec))
 
 
+class TestProfiles:
+    """Die Groessenklassen. Die Zahlen stammen aus den FiveM-Leitfaeden und
+    den ueblichen Polycount-Baendern - nicht aus dem Bauch."""
+
+    def _prop(self, **extra):
+        raw = {
+            "pipeline": {"resource_name": "r"},
+            "prop": [{"name": "pf_x", "mesh": "m.glb",
+                      "textures": {"diffuse": "d.png"}, **extra}],
+        }
+        return PipelineConfig.from_dict(raw).props[0]
+
+    def test_default_is_standard(self):
+        spec = self._prop()
+        assert spec.profile == "standard"
+        assert spec.max_tris == 4000
+        assert spec.texture_size == 512
+
+    def test_clutter_is_smaller_in_every_dimension(self):
+        clutter, standard = self._prop(profile="clutter"), self._prop()
+        assert clutter.max_tris < standard.max_tris
+        assert clutter.texture_size < standard.texture_size
+        # Was klein ist, muss nicht weit gerendert werden.
+        assert clutter.lods.distances["verylow"] < standard.lods.distances["verylow"]
+
+    def test_explicit_value_beats_profile(self):
+        spec = self._prop(profile="clutter", texture_size=1024)
+        assert spec.texture_size == 1024
+        assert spec.max_tris == 1500
+
+    def test_unknown_profile_is_rejected_by_name(self):
+        from propforge.config import ConfigError
+
+        with pytest.raises(ConfigError, match="clutter"):
+            self._prop(profile="riesig")
+
+    def test_profiles_are_ordered_by_budget(self):
+        from propforge.config import PROFILES
+
+        order = [PROFILES[n].max_tris for n in ("clutter", "standard", "detailed", "hero")]
+        assert order == sorted(order)
+
+    def test_every_profile_has_all_four_distances(self):
+        from propforge.config import LOD_LEVELS, PROFILES
+
+        for profile in PROFILES.values():
+            assert set(profile.distances) == set(LOD_LEVELS)
+            values = [profile.distances[l] for l in LOD_LEVELS]
+            assert values == sorted(values), profile.name
+
+    def test_over_budget_warns(self):
+        from propforge import validate as v
+
+        found = v.validate_prop(self._prop(profile="clutter", max_tris=9000))
+        assert "budget_tris" in {f.code for f in found}
+
+    def test_within_budget_is_quiet(self):
+        from propforge import validate as v
+
+        found = {f.code for f in v.validate_prop(self._prop())}
+        assert "budget_tris" not in found and "budget_texture" not in found
+
+
+class TestTextureMemory:
+    def test_matches_published_figures(self):
+        # Gegenprobe an den veroeffentlichten Werten: 1024er DXT1 mit
+        # Mipmaps rund 0,7 MiB, 2048er rund 2,7 MiB.
+        from propforge.config import texture_memory
+
+        assert 0.6 < texture_memory(1024, 1) / 1024 / 1024 < 0.75
+        assert 2.5 < texture_memory(2048, 1) / 1024 / 1024 < 2.9
+
+    # Die Vergleiche laufen ueber ein Verhaeltnis, nicht ueber Gleichheit:
+    # das Ergebnis wird auf ganze Bytes abgeschnitten, und exakte Gleichheit
+    # scheitert dann an einem einzelnen Byte. Geprueft gehoert die Aussage,
+    # nicht die Rundung.
+    def test_alpha_costs_double(self):
+        from propforge.config import texture_memory
+
+        assert texture_memory(512, 1, with_alpha=1) / texture_memory(512, 1) == pytest.approx(2.0, rel=1e-4)
+
+    def test_scales_with_role_count(self):
+        from propforge.config import texture_memory
+
+        assert texture_memory(512, 3) / texture_memory(512, 1) == pytest.approx(3.0, rel=1e-4)
+
+    def test_large_texture_set_warns(self):
+        from propforge import validate as v
+        from propforge.config import PipelineConfig as PC
+
+        raw = {"pipeline": {"resource_name": "r"},
+               "prop": [{"name": "pf_x", "mesh": "m.glb", "profile": "hero",
+                         "texture_size": 2048,
+                         "textures": {"diffuse": "d.png", "normal": "n.png",
+                                      "roughness": "r.png"}}]}
+        found = {f.code for f in v.validate_prop(PC.from_dict(raw).props[0])}
+        assert "texture_memory" in found
+
+
 class TestConfigMerge:
     def _config(self, prop_extra: dict):
         raw = {

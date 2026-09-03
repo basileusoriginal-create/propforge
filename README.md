@@ -122,20 +122,96 @@ flags = 32                # 32 = "Static", der Normalfall für einen Prop
 # texture_dictionary = "" # Vorgabe: leer, weil die Texturen in der .ydr liegen
 ```
 
-## Mesh erzeugen lassen
+## Lokale Routine
+
+Kein Hantieren mit Konfigurationsdateien — der Ablauf läuft über Ordner:
 
 ```bash
-export TRIPO_API_KEY=...
-python -m propforge.cli generate "ein rustikaler Holztisch aus Eiche" --face-limit 6000
+python -m propforge.cli init       # legt work/eingang, work/fertig, work/ausgabe an
+python -m propforge.cli batch      # fragt Assets ab und erzeugt sie in den Eingang
+python -m propforge.cli convert    # macht daraus .ydr, .ytyp und die Resource
+```
+
+`batch` fragt Zeile für Zeile: Prompt, Größenklasse, Kollisionsmaterial (mit
+Vorschlag aus dem Namen, `?` sucht). Leere Zeile beendet die Eingabe, dann
+läuft alles durch.
+
+**Ohne Generator geht dasselbe:** GLBs einfach in `work/eingang` kopieren und
+`convert` aufrufen — der Schritt sieht keinen Unterschied. Wer will, legt
+neben ein Mesh eine Begleitdatei `name.job.json` mit Größenklasse und
+Material; fehlt sie, greifen die Vorgaben.
+
+Nach dem Umwandeln wandern die verarbeiteten Meshes nach `work/fertig`. **Was
+fehlschlägt, bleibt im Eingang liegen** und kommt beim nächsten Lauf wieder
+dran. In der `propforge.toml` steht einmalig der Blender-Pfad, damit
+`--blender` nicht jedes Mal nötig ist.
+
+## Größenklassen
+
+Ein Prop ist nicht gleich ein Prop. Statt einer Zahl für alles gibt es vier
+Klassen, die Dreiecksbudget, Texturgröße und Sichtweiten setzen:
+
+| Profil | Dreiecke | Textur | Wofür |
+|---|---|---|---|
+| `clutter` | 1 500 | 256 px | Flasche, Dose, Becher, Werkzeug |
+| `standard` | 4 000 | 512 px | Kiste, Stuhl, Tisch, Tonne, Regal |
+| `detailed` | 10 000 | 1024 px | Automat, Maschine, Tür, Schild mit Text |
+| `hero` | 20 000 | 1024 px | Schaustück im Mittelpunkt |
+
+```toml
+[[prop]]
+profile = "clutter"
+```
+
+Die Texturgrößen folgen den FiveM-Optimierungsleitfäden (Kleinkram 256–512,
+lesbare Schilder 512–1024; eine `.ytd` ab etwa 16 MB gilt als zu groß), die
+Dreiecksbudgets den üblichen Polycount-Bändern für Spiel-Props — GTA V ist von
+2013 und liegt jeweils im unteren Teil. Die Sichtweiten sind Heuristik: was
+klein ist, muss nicht auf 500 m gerendert werden.
+
+Das Profil ist die **unterste Schicht** — alles, was in `[defaults]` oder am
+Prop ausdrücklich steht, gewinnt. `validate` warnt, wenn ein Prop sein Budget
+überschreitet, und schätzt den Texturspeicher mit.
+
+## Fertige Assets einlesen
+
+Der Generator ist optional. Ein vorhandenes Modell geht denselben Weg:
+
+```bash
+python -m propforge.cli ingest mein_modell.glb --name pf_tisch
+```
+
+Texturen werden entpackt und auf die Profilgröße begrenzt, die Größenklasse
+aus der Dreieckszahl geschätzt, das Kollisionsmaterial abgefragt, der
+`[[prop]]`-Block geschrieben.
+
+## Mesh erzeugen lassen
+
+**Schlüssel hinterlegen** — einer der drei Wege reicht:
+
+```
+1. Datei .env im Repo-Ordner:   TRIPO_API_KEY=tsk_...
+   (steht in der .gitignore — landet nicht im öffentlichen Repo)
+2. Windows, dauerhaft:          setx TRIPO_API_KEY "tsk_..."   → neues Terminal öffnen
+3. Nur für einen Aufruf:        --api-key tsk_...
+```
+
+```bash
+python -m propforge.cli generate "ein rustikaler Holztisch aus Eiche" --profile standard
 ```
 
 Erzeugt das Mesh, lädt es herunter und reicht es direkt an `ingest` weiter —
 Texturen entpackt, Kollisionsmaterial abgefragt, `[[prop]]`-Block geschrieben.
 `--dry-run` zeigt ohne Schlüssel, was abgeschickt würde.
 
-**Warum Tripo:** Pay-as-you-go ohne Abo (1 Credit = 1 US-Cent, Text-zu-3D mit
-Textur = 20 Credits), kommerzielle Rechte hängen an der API-Nutzung ohne
-Namensnennung, und die Ausgabe ist GLB mit PBR-Texturen und einer
+**Modellwahl:** Vorgabe ist `P1-20260311` — schneller und günstiger, für
+Hintergrund- und Einrichtungs-Props ausreichend. `--model P2-20260801` bringt
+sauberere Texturen im Nahbereich und Quad-Topologie, kostet aber mehr Credits.
+Der tatsächliche Preis je Generierung steht im Tripo-Konto; nach dem ersten
+Lauf lohnt ein Blick auf den Kontostand.
+
+**Warum Tripo:** Pay-as-you-go ohne Abo (1 Credit = 1 US-Cent), kommerzielle
+Rechte hängen an der API-Nutzung ohne Namensnennung, und die Ausgabe ist GLB mit PBR-Texturen und einer
 Dreiecksobergrenze — genau das, was die Pipeline danach braucht. Bei Meshy
 braucht es für API und volles Eigentum den Pro-Plan; die kostenlose Stufe steht
 unter CC BY und verlangt Attribution im Endprodukt.
@@ -194,7 +270,7 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-298 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+344 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
 Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
 die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 

@@ -10,6 +10,8 @@ Tripo-API: Fehler stehen im Rumpf statt im HTTP-Status, und Ergebnis-URLs
 laufen nach fuenf Minuten ab.
 """
 
+from pathlib import Path
+
 import pytest
 
 from propforge import generate as gen
@@ -60,6 +62,66 @@ def request(**kwargs):
     return gen.GenerationRequest(**base)
 
 
+class TestTokenLookup:
+    """Der Schluessel darf nicht im oeffentlichen Repo landen - deshalb .env
+    (in der .gitignore) statt einer Zeile in der Konfiguration."""
+
+    def test_explicit_wins(self, tmp_path):
+        assert gen.find_token("direkt", env_file=tmp_path / "fehlt") == "direkt"
+
+    def test_reads_env_file(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("TRIPO_API_KEY=tsk_aus_datei\n")
+        assert gen.find_token(None, env_file=path) == "tsk_aus_datei"
+
+    def test_missing_file_is_not_an_error(self, tmp_path):
+        assert gen.load_env_file(tmp_path / "gibtsnicht") == {}
+
+    def test_ignores_comments_and_blanks(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text("# Kommentar\n\nTRIPO_API_KEY=abc\nkaputte Zeile\n")
+        assert gen.load_env_file(path) == {"TRIPO_API_KEY": "abc"}
+
+    def test_strips_quotes_and_spaces(self, tmp_path):
+        path = tmp_path / ".env"
+        path.write_text('TRIPO_API_KEY = "tsk_123"  \n')
+        assert gen.load_env_file(path)["TRIPO_API_KEY"] == "tsk_123"
+
+    def test_none_when_nowhere(self, tmp_path, monkeypatch=None):
+        import os
+
+        saved = os.environ.pop("TRIPO_API_KEY", None)
+        try:
+            assert gen.find_token(None, env_file=tmp_path / "fehlt") is None
+        finally:
+            if saved is not None:
+                os.environ["TRIPO_API_KEY"] = saved
+
+
+class TestProfilePassThrough:
+    """Die ausdrueckliche Wahl darf die Schaetzung nicht verlieren."""
+
+    def test_explicit_profile_beats_estimate(self):
+        from propforge.ingest import AssetInfo, config_snippet, suggest_profile
+
+        info = AssetInfo(name="pf_flasche", triangles=2400, vertices=1200,
+                         dimensions=(0.07, 0.07, 0.25), center=(0, 0, 0),
+                         has_uvs=True, materials=1, double_sided=False, textures={})
+        # Die Schaetzung allein saehe hier 'standard'.
+        assert suggest_profile(2400) == "standard"
+        snippet = config_snippet(info, Path("a/pf.glb"), Path("a"), None, "clutter")
+        assert 'profile = "clutter"' in snippet
+
+    def test_estimate_used_when_nothing_chosen(self):
+        from propforge.ingest import AssetInfo, config_snippet
+
+        info = AssetInfo(name="pf_x", triangles=800, vertices=400,
+                         dimensions=(1, 1, 1), center=(0, 0, 0),
+                         has_uvs=True, materials=1, double_sided=False, textures={})
+        assert 'profile = "clutter"' in config_snippet(
+            info, Path("a/pf.glb"), Path("a"), None, None)
+
+
 class TestPayload:
     def test_asks_for_pbr_and_texture(self):
         body = request().payload()
@@ -73,17 +135,56 @@ class TestPayload:
     def test_zero_face_limit_is_omitted(self):
         assert "face_limit" not in request(face_limit=0).payload()
 
-    def test_model_version_omitted_by_default(self):
-        # Eine festgeschriebene Version veraltet still: sie bleibt gueltig,
-        # waehrend der Dienst laengst bessere Modelle anbietet.
-        assert "model" not in request().payload()
-        assert request(model_version="v3.1").payload()["model"] == "v3.1"
+    def test_model_is_always_sent(self):
+        # Pflichtfeld. Der erste echte Aufruf scheiterte an genau dieser
+        # Annahme: HTTP 400 "model is required".
+        assert request().payload()["model"] == gen.DEFAULT_MODEL
+
+    def test_model_can_be_overridden(self):
+        assert request(model_version=gen.BETTER_MODEL).payload()["model"] == gen.BETTER_MODEL
 
     def test_dry_run_shows_endpoint_and_body(self):
         text = gen.describe_request(request(face_limit=6000))
         assert "openapi.tripo3d.ai/v3/generation/text-to-model" in text
         assert '"face_limit": 6000' in text
         assert "Bearer" in text
+
+
+class TestApiErrors:
+    """Die Antwort des Dienstes ist oft hilfreicher als alles, was wir raten
+    koennten - sie muss nur lesbar durchgereicht werden."""
+
+    ALLOWED = (
+        '{"code":1004,"status":"error","message":"model is required, allowed '
+        'values: P1-20260311, P2-20260801, v2.5-20250123",ّ"suggestion":"Refer to '
+        'the API documentation","request_id":"abc"}'
+    ).replace("ّ", "")
+
+    def test_message_is_extracted(self):
+        text = gen.explain_api_error(400, self.ALLOWED)
+        assert "model is required" in text
+
+    def test_allowed_values_are_listed(self):
+        text = gen.explain_api_error(400, self.ALLOWED)
+        assert "P1-20260311" in text and "P2-20260801" in text
+
+    def test_names_the_flag_to_use(self):
+        # Ohne diesen Hinweis muss man in der Doku suchen, obwohl der Dienst
+        # die Antwort schon mitgeliefert hat.
+        assert "--model" in gen.explain_api_error(400, self.ALLOWED)
+
+    def test_suggestion_and_request_id_kept(self):
+        text = gen.explain_api_error(400, self.ALLOWED)
+        assert "API documentation" in text
+        assert "request_id: abc" in text
+
+    def test_non_json_body_is_passed_through(self):
+        assert "Bad Gateway" in gen.explain_api_error(502, "Bad Gateway")
+
+    def test_plain_error_without_allowed_values(self):
+        text = gen.explain_api_error(402, '{"code":2002,"message":"insufficient credits"}')
+        assert "insufficient credits" in text
+        assert "--model" not in text
 
 
 class TestCreate:

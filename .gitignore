@@ -5,5 +5,9 @@ ci/out/
 /assets/
 ci/assets/pf_testprop*
 ci/assets/pf_rig*
+# Zugangsschluessel. Das Repo ist oeffentlich - ein versehentlich
+# eingecheckter API-Key waere sofort fuer alle sichtbar.
+.env
+
 __pycache__/
 *.pyc

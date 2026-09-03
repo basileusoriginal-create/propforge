@@ -25,6 +25,79 @@ class ConfigError(ValueError):
     """Fehlerhafte oder unvollstaendige Pipeline-Konfiguration."""
 
 
+# --- Profile ----------------------------------------------------------------
+#
+# Ein Prop ist nicht gleich ein Prop: eine Flasche und ein Verkaufsautomat
+# haben nichts gemeinsam ausser dem Dateiformat. Statt eine Zahl fuer alles
+# zu erfinden, gibt es vier Groessenklassen mit Budgets.
+#
+# Woher die Zahlen kommen:
+#
+#   Texturgroessen  aus den FiveM-Optimierungsleitfaeden: Kleinkram und
+#                   Clutter 256-512, lesbare Schilder 512-1024, Karten- und
+#                   MLO-Texturen 512-1024 je wiederverwendetem Material.
+#                   Als Faustzahl gilt eine .ytd ab etwa 16 MB physischem
+#                   Texturspeicher als zu gross.
+#   Dreiecke        aus den ueblichen Polycount-Baendern fuer Spiel-Props:
+#                   winziger Hintergrundkram 100-2000, normale
+#                   Umgebungs-Props 1000-10000, detaillierte interaktive
+#                   Objekte 5000-30000. GTA V ist von 2013 und liegt im
+#                   jeweils unteren Teil dieser Baender.
+#   Sichtweiten     unsere Heuristik, nicht zitiert: was klein ist, muss
+#                   nicht weit gerendert werden. Eine Flasche auf 500 m ist
+#                   verschwendete Zeichenlast.
+#
+# Die Profile sind die *unterste* Schicht: alles, was in [defaults] oder am
+# Prop ausdruecklich dasteht, gewinnt.
+
+@dataclass(frozen=True)
+class Profile:
+    name: str
+    max_tris: int
+    texture_size: int
+    distances: dict[str, float]
+    usage: str
+
+
+PROFILES: dict[str, Profile] = {
+    "clutter": Profile(
+        "clutter", 1500, 256,
+        {"high": 30.0, "medium": 60.0, "low": 120.0, "verylow": 200.0},
+        "Kleinkram: Flasche, Dose, Becher, Werkzeug, Papierstapel."),
+    "standard": Profile(
+        "standard", 4000, 512,
+        {"high": 60.0, "medium": 120.0, "low": 250.0, "verylow": 500.0},
+        "Normaler Einrichtungs-Prop: Kiste, Stuhl, Tisch, Tonne, Regal."),
+    "detailed": Profile(
+        "detailed", 10000, 1024,
+        {"high": 80.0, "medium": 150.0, "low": 300.0, "verylow": 600.0},
+        "Detailliertes oder benutzbares Objekt: Automat, Maschine, Tuer, Schild mit Text."),
+    "hero": Profile(
+        "hero", 20000, 1024,
+        {"high": 100.0, "medium": 200.0, "low": 400.0, "verylow": 800.0},
+        "Schaustueck, das im Mittelpunkt steht. Sparsam einsetzen."),
+}
+
+DEFAULT_PROFILE = "standard"
+
+# Bytes je Pixel im komprimierten Format, Mipmaps eingerechnet (Faktor 4/3).
+# DXT1 belegt 8 Byte je 4x4-Block, DXT5 16.
+DXT1_BYTES_PER_PIXEL = 0.5
+DXT5_BYTES_PER_PIXEL = 1.0
+MIPMAP_FACTOR = 4 / 3
+
+
+def texture_memory(size: int, roles: int, with_alpha: int = 0) -> int:
+    """Geschaetzter Texturspeicher in Bytes fuer einen Prop.
+
+    Gegenprobe an den veroeffentlichten Werten: 1024er DXT1 mit Mipmaps
+    ergibt rund 0,7 MiB, 2048er rund 2,7 MiB - beides passt.
+    """
+    plain = max(0, roles - with_alpha)
+    per_pixel = plain * DXT1_BYTES_PER_PIXEL + with_alpha * DXT5_BYTES_PER_PIXEL
+    return int(size * size * per_pixel * MIPMAP_FACTOR)
+
+
 @dataclass
 class TextureSet:
     """Rohtexturen, wie sie ein Generator (Meshy, Tripo, Rodin) ausgibt."""
@@ -129,6 +202,9 @@ class PropSpec:
     name: str
     mesh: str
     textures: TextureSet
+    # Groessenklasse. Setzt Dreiecksbudget, Texturgroesse und Sichtweiten,
+    # solange nichts davon ausdruecklich dasteht.
+    profile: str = DEFAULT_PROFILE
     shader: str = "normal_spec.sps"
     lods: LodSettings = field(default_factory=LodSettings)
     collision: CollisionSettings = field(default_factory=CollisionSettings)
@@ -267,6 +343,24 @@ def _merge(defaults: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
 def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -> PropSpec:
     merged: dict[str, Any] = _merge(defaults, raw)
 
+    # Profil als unterste Schicht einziehen. Alles, was ausdruecklich
+    # dasteht - global oder am Prop -, gewinnt darueber.
+    profile_name = str(merged.get("profile", DEFAULT_PROFILE)).lower()
+    profile = PROFILES.get(profile_name)
+    if profile is None:
+        raise ConfigError(
+            f"Unbekanntes Profil '{profile_name}'. Moeglich: "
+            + ", ".join(PROFILES) + "."
+        )
+    merged = _merge(
+        {
+            "max_tris": profile.max_tris,
+            "texture_size": profile.texture_size,
+            "lods": {"distances": dict(profile.distances)},
+        },
+        merged,
+    )
+
     try:
         name = merged["name"]
         mesh = merged["mesh"]
@@ -289,7 +383,7 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
     lod_raw = merged.get("lods", {})
     lods = LodSettings(
         ratios=lod_raw.get("ratios", LodSettings().ratios),
-        distances=lod_raw.get("distances", LodSettings().distances),
+        distances=lod_raw.get("distances", dict(profile.distances)),
     )
 
     col_raw = merged.get("collision", {})
@@ -315,6 +409,7 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
         name=name,
         mesh=resolve(mesh),
         textures=textures,
+        profile=profile_name,
         shader=merged.get("shader", "normal_spec.sps"),
         lods=lods,
         collision=collision,

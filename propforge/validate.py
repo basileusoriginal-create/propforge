@@ -15,7 +15,14 @@ from pathlib import Path
 from PIL import Image
 
 from . import collision_materials as pf_materials
-from .config import LOD_LEVELS, VALID_TEXTURE_SIZES, PipelineConfig, PropSpec
+from .config import (
+    LOD_LEVELS,
+    PROFILES,
+    VALID_TEXTURE_SIZES,
+    PipelineConfig,
+    PropSpec,
+    texture_memory,
+)
 
 # Archetype-Namen landen in ytyp/ymap und werden gehasht. Grossbuchstaben,
 # Leerzeichen und Sonderzeichen fuehren zu stillen Fehlschlaegen beim Lookup.
@@ -62,6 +69,30 @@ def validate_prop(spec: PropSpec) -> list[Finding]:
 
     def add(level: Level, code: str, message: str) -> None:
         findings.append(Finding(level, code, message, prop=spec.name))
+
+    # --- Budget ---
+    #
+    # Nicht bevormundend, aber sichtbar: wer ueber das Budget seiner
+    # Groessenklasse geht, soll es wissen. Ein einzelner grosser Prop ist
+    # kein Problem - hundert davon auf einem Server schon.
+    profile = PROFILES.get(spec.profile)
+    if profile is not None:
+        if spec.max_tris > profile.max_tris:
+            add(Level.WARNING, "budget_tris",
+                f"{spec.max_tris} Dreiecke liegen ueber dem Budget des Profils "
+                f"'{profile.name}' ({profile.max_tris}). Passt die Groessenklasse?")
+        if spec.texture_size > profile.texture_size:
+            add(Level.WARNING, "budget_texture",
+                f"Textur {spec.texture_size} px liegt ueber dem Budget des Profils "
+                f"'{profile.name}' ({profile.texture_size} px).")
+
+    roles = len(spec.textures.present())
+    memory = texture_memory(spec.texture_size, roles)
+    if memory > 4 * 1024 * 1024:
+        add(Level.WARNING, "texture_memory",
+            f"Rund {memory / 1024 / 1024:.1f} MiB Texturspeicher fuer {roles} Texturen "
+            f"a {spec.texture_size} px. Als Faustzahl gilt eine .ytd ab etwa 16 MB "
+            "als zu gross - ein einzelner Prop sollte deutlich darunter bleiben.")
 
     # --- Name ---
     if not ARCHETYPE_NAME_RE.match(spec.name):
