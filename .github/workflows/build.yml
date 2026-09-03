@@ -233,6 +233,14 @@ jobs:
           python -m propforge.cli run ci/pipeline.ci.native.toml --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      # Der NATIVE-Pfad schreibt Binaerdateien und ist damit der einzige, den
+      # das Spiel direkt laedt -- und bis hierher war er der einzige, ueber den
+      # von aussen nichts zu erfahren war. Ohne diese Zeilen bleibt eine
+      # entgleiste Binaerausgabe unsichtbar, waehrend der Job gruen meldet.
+      - name: Ergebnis als Annotation ausgeben
+        if: always()
+        run: python ci/report_build.py ci/out/build_result.json "Build (Windows, NATIVE)"
+
       - name: Fehler als Annotation ausgeben
         if: failure()
         run: python ci/report_failure.py ci-build.log "Pipeline (Windows, NATIVE)"

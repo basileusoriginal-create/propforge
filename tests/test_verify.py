@@ -229,6 +229,19 @@ class TestVerifyPipeline:
         found = pf_verify.verify(self._config(tmp_path), build)
         assert "drawable_suspiciously_small" in codes(found, Level.WARNING)
 
+    def test_implausibly_large_drawable_is_an_error(self, tmp_path):
+        # Ein halbes Gigabyte fuer einen Prop heisst nicht "detailliert",
+        # sondern "der Schreiber ist entgleist". Sowas darf nicht gepackt
+        # werden, also ist es ein Fehler und keine Warnung.
+        build = tmp_path / "build"
+        build.mkdir()
+        path = write_ydr(build)
+        with path.open("r+b") as fh:
+            fh.seek(pf_verify.MAX_DRAWABLE_BYTES + 1)
+            fh.write(b"\0")
+        found = pf_verify.verify(self._config(tmp_path), build)
+        assert "drawable_implausibly_large" in codes(found, Level.ERROR)
+
     def test_large_drawable_not_flagged(self, tmp_path):
         build = tmp_path / "build"
         build.mkdir()

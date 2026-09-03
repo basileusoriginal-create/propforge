@@ -23,6 +23,17 @@ DISTANCE_TOLERANCE = 0.5
 # Sorte Fehler kommt sonst erst im Spiel heraus, als unsichtbarer Prop.
 MIN_DRAWABLE_BYTES = 8 * 1024
 
+# Und die Gegenrichtung.
+#
+# Ein Prop im Dreitausend-Dreieck-Bereich mit eingebetteten 512er-Texturen
+# liegt bei rund einem Megabyte. Wird daraus ein dreistelliger Megabyte-Wert,
+# ist der Schreiber entgleist - RAGE-Ressourcen haben eine seitenbasierte
+# Speicherstruktur, und ein falsch gewaehltes Seitenschema blaeht die Datei um
+# Groessenordnungen auf, ohne dass irgendetwas fehlschlaegt. Eine solche Datei
+# ist nicht "gross", sondern kaputt: kein Werkzeug laedt sie, und gepackt
+# wandert sie ungefragt auf den Server.
+MAX_DRAWABLE_BYTES = 64 * 1024 * 1024
+
 # Erwartete Samplernamen je Texturrolle.
 ROLE_SAMPLERS = {"_d": "DiffuseSampler", "_n": "BumpSampler", "_s": "SpecSampler"}
 
@@ -247,15 +258,27 @@ def _verify_size(spec: PropSpec, path: Path) -> list[Finding]:
     ohne dass das Binaerformat geparst werden muss.
     """
     size = path.stat().st_size
-    if size >= MIN_DRAWABLE_BYTES:
-        return []
-    return [Finding(
-        Level.WARNING, "drawable_suspiciously_small",
-        f"'{path.name}' ist nur {size} Bytes gross. Ein Prop mit Geometrie und "
-        f"eingebetteten Texturen liegt weit darueber - das sieht nach einer "
-        "leeren Huelle aus, die im Spiel unsichtbar waere.",
-        prop=spec.name,
-    )]
+
+    if size > MAX_DRAWABLE_BYTES:
+        return [Finding(
+            Level.ERROR, "drawable_implausibly_large",
+            f"'{path.name}' ist {size / (1024 * 1024):.0f} MB gross. Fuer "
+            f"{spec.max_tris} Dreiecke mit {spec.texture_size}er-Texturen sind "
+            "das Groessenordnungen zu viel - die Datei ist nicht gross, sondern "
+            "kaputt. Kein Werkzeug wird sie laden.",
+            prop=spec.name,
+        )]
+
+    if size < MIN_DRAWABLE_BYTES:
+        return [Finding(
+            Level.WARNING, "drawable_suspiciously_small",
+            f"'{path.name}' ist nur {size} Bytes gross. Ein Prop mit Geometrie und "
+            f"eingebetteten Texturen liegt weit darueber - das sieht nach einer "
+            "leeren Huelle aus, die im Spiel unsichtbar waere.",
+            prop=spec.name,
+        )]
+
+    return []
 
 
 def _verify_ytyp_file(
