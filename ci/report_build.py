@@ -27,6 +27,9 @@ def describe(prop: dict) -> list[str]:
         tallest = max((("X", x), ("Y", y), ("Z", z)), key=lambda p: p[1])
         lines.append(f"  laengste Achse: {tallest[0]} ({tallest[1]:.3f} m)")
 
+    ytyp = prop.get("ytyp")
+    lines.append(f"  ytyp: {ytyp}" if ytyp else "  ytyp: keine")
+
     for entry in prop.get("previews", []):
         lines.append(
             f"  LOD {entry.get('lod', '?'):<8} "

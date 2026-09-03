@@ -34,24 +34,39 @@ try:
 except ImportError:  # Notfallpfad, falls das Repo-Layout nicht mitgereicht wurde
     def import_sollumz():
         import importlib
+        from types import SimpleNamespace
 
         errors = []
         for module_name in ("Sollumz", "sollumz", "bl_ext.user_default.sollumz"):
             try:
                 props = importlib.import_module(f"{module_name}.sollumz_properties")
                 shaders = importlib.import_module(f"{module_name}.ydr.shader_materials")
-                return props.SollumType, props.LODLevel, shaders.create_shader, module_name
+                return SimpleNamespace(
+                    module=module_name,
+                    SollumType=props.SollumType,
+                    LODLevel=props.LODLevel,
+                    ArchetypeType=props.ArchetypeType,
+                    AssetType=props.AssetType,
+                    create_shader=shaders.create_shader,
+                )
             except ImportError as exc:
                 errors.append(f"  {module_name}: {exc}")
         raise ImportError("Sollumz nicht gefunden:\n" + "\n".join(errors))
 
 
 try:
-    SollumType, LODLevel, create_shader, SOLLUMZ_MODULE = import_sollumz()
+    _sz = import_sollumz()
 except ImportError as exc:
     raise SystemExit(
         f"{exc}\n\nAdd-on installieren und aktivieren, dann erneut versuchen."
     ) from exc
+
+SollumType = _sz.SollumType
+LODLevel = _sz.LODLevel
+ArchetypeType = _sz.ArchetypeType
+AssetType = _sz.AssetType
+create_shader = _sz.create_shader
+SOLLUMZ_MODULE = _sz.module
 
 
 LOD_ENUM = {
@@ -485,6 +500,98 @@ def apply_lod_distances(drawable: bpy.types.Object, distances: dict) -> None:
     props.lod_dist_vlow = float(distances.get("verylow", 500.0))
 
 
+# --- Archetyp (.ytyp) --------------------------------------------------------
+
+def has_embedded_texture(drawable: bpy.types.Object) -> bool:
+    """Traegt irgendein Material des Drawables eine eingebettete Textur?"""
+    for child in [drawable, *drawable.children_recursive]:
+        data = getattr(child, "data", None)
+        materials = getattr(data, "materials", None) or ()
+        for mat in materials:
+            tree = getattr(mat, "node_tree", None)
+            if tree is None:
+                continue
+            for node in tree.nodes:
+                if not isinstance(node, bpy.types.ShaderNodeTexImage):
+                    continue
+                # texture_properties wird von Sollumz an den Node gehaengt.
+                # Ohne aktives Add-on gibt es die Property nicht - dann ist
+                # ohnehin nichts eingebettet.
+                props = getattr(node, "texture_properties", None)
+                if props is not None and getattr(props, "embedded", False):
+                    return True
+    return False
+
+
+def has_embedded_collision(drawable: bpy.types.Object) -> bool:
+    return any(
+        getattr(child, "sollum_type", None) == SollumType.BOUND_COMPOSITE
+        for child in drawable.children_recursive
+    )
+
+
+def create_ytyp(drawable: bpy.types.Object, settings: dict) -> str:
+    """Legt eine .ytyp mit genau einem Archetyp fuer dieses Drawable an.
+
+    Ohne Archetyp-Definition findet das Spiel den Prop nicht: die .ydr allein
+    ist nur Geometrie, erst der Archetyp gibt ihr einen Namen, unter dem sie
+    spawnbar ist.
+
+    Bewusst kein externes Werkzeug. Ein ytyp-Generator, der nur die fertige
+    Datei sieht, muss raten, ob Kollision und Texturen eingebettet sind. Diese
+    Stufe weiss es, weil sie beides selbst hineingebaut hat.
+
+    Sollumz fuellt beim Setzen von ``archetype.asset`` einige Felder selbst -
+    aber nicht alle: die Erkennung eingebetteter Texturen prueft dort auf
+    ``DRAWABLE_GEOMETRY``, einen Typ, den das aktuelle Sollumz gar nicht mehr
+    erzeugt. Deshalb wird hier jedes Feld selbst gesetzt und anschliessend
+    protokolliert, was tatsaechlich drinsteht.
+    """
+    scene = bpy.context.scene
+    name = drawable.name
+    ytyp_name = settings.get("name") or f"{name}_ityp"
+
+    ytyp = scene.ytyps.add()
+    ytyp.name = ytyp_name
+    scene.ytyp_index = len(scene.ytyps) - 1
+
+    archetype = ytyp.new_archetype(ArchetypeType.BASE)
+    archetype.name = name
+    # Setzt asset_name, asset_type und (bei eingebetteter Kollision)
+    # physics_dictionary automatisch. Wird unten trotzdem nachgezogen.
+    archetype.asset = drawable
+    archetype.asset_name = name
+    archetype.asset_type = AssetType.DRAWABLE
+
+    archetype.lod_dist = float(settings.get("lod_dist", 500.0))
+    archetype.hd_texture_dist = float(settings.get("hd_texture_dist", 100.0))
+    archetype.flags.total = str(int(settings.get("flags", 32)))
+
+    # Eingebettete Kollision wird ueber den eigenen Namen referenziert.
+    # Ohne Kollision bleibt das Feld leer, sonst sucht das Spiel eine .ybn,
+    # die es nicht gibt.
+    archetype.physics_dictionary = name if has_embedded_collision(drawable) else ""
+
+    # Texturwoerterbuch: nur setzen, wenn die Texturen NICHT eingebettet sind.
+    # Eingebettete Texturen liegen in der .ydr selbst; ein Verweis auf eine
+    # nicht existierende .ytd waere ein Fehler ohne Nutzen.
+    override = settings.get("texture_dictionary")
+    if override is not None:
+        archetype.texture_dictionary = str(override)
+    elif has_embedded_texture(drawable):
+        archetype.texture_dictionary = ""
+    else:
+        archetype.texture_dictionary = name
+
+    log(f"YTYP '{ytyp_name}': Archetyp '{archetype.name}' "
+        f"(asset={archetype.asset_name}, lodDist={archetype.lod_dist:g}, "
+        f"flags={archetype.flags.total}, "
+        f"physics='{archetype.physics_dictionary}', "
+        f"txd='{archetype.texture_dictionary}')")
+
+    return ytyp_name
+
+
 # --- Export -----------------------------------------------------------------
 
 # Vollstaendige Export-Settings. Sollumz' eigene Testsuite uebergibt diese
@@ -501,7 +608,10 @@ EXPORT_SETTINGS = {
     "apply_transforms": False,
     "mesh_domain": "FACE_CORNER",
     "export_ytyps": False,
-    "export_ytyps_include": "ALL",
+    # SELECTED statt ALL: exportiert genau die ytyp, deren Index gesetzt ist.
+    # ALL wuerde auch ytyps mitnehmen, die in einer Startup-Datei des Nutzers
+    # stecken - im Batch waere das eine stille Fremddatei im Resource-Ordner.
+    "export_ytyps_include": "SELECTED",
     "export_ymaps": False,
     "export_ymaps_include": "ALL",
     "export_ytds": False,
@@ -509,12 +619,28 @@ EXPORT_SETTINGS = {
 }
 
 
-def export(drawable: bpy.types.Object, out_dir: Path, fmt: str, version: str) -> None:
+def _written(out_dir: Path, stem: str, marker: str) -> list[Path]:
+    return sorted(
+        p for p in out_dir.iterdir()
+        if p.is_file() and p.name.startswith(stem) and marker in p.name
+    )
+
+
+def export(
+    drawable: bpy.types.Object,
+    out_dir: Path,
+    fmt: str,
+    version: str,
+    ytyp_name: str | None = None,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     select_only(drawable)
     for child in drawable.children_recursive:
         child.select_set(True)
+
+    settings = dict(EXPORT_SETTINGS)
+    settings["export_ytyps"] = ytyp_name is not None
 
     result = bpy.ops.sollumz.export_assets(
         directory=str(out_dir),
@@ -522,7 +648,7 @@ def export(drawable: bpy.types.Object, out_dir: Path, fmt: str, version: str) ->
         use_custom_settings=True,
         target_formats={fmt},
         target_versions={version},
-        **EXPORT_SETTINGS,
+        **settings,
     )
     if result != {"FINISHED"}:
         raise RuntimeError(f"Export lieferte {result} statt FINISHED.")
@@ -531,10 +657,7 @@ def export(drawable: bpy.types.Object, out_dir: Path, fmt: str, version: str) ->
     # der Export intern ab (etwa weil ein Material fehlt), landet das als
     # Warnung im Log und der Operator meldet trotzdem Erfolg. Deshalb wird
     # hier gegen das Dateisystem geprueft.
-    written = sorted(
-        p for p in out_dir.iterdir()
-        if p.is_file() and p.name.startswith(drawable.name) and ".ydr" in p.name
-    )
+    written = _written(out_dir, drawable.name, ".ydr")
     if not written:
         existing = [p.name for p in out_dir.iterdir() if p.is_file()] or ["(nichts)"]
         raise RuntimeError(
@@ -542,6 +665,19 @@ def export(drawable: bpy.types.Object, out_dir: Path, fmt: str, version: str) ->
             f"Im Zielverzeichnis liegt: {', '.join(existing)}. "
             "Die Ursache steht als WARNING in der Sollumz-Ausgabe weiter oben."
         )
+
+    # Dieselbe Pruefung fuer die ytyp. Sie laeuft im Export durch denselben
+    # Zweig, der Fehler still ins Log schreibt.
+    if ytyp_name is not None:
+        ytyps = _written(out_dir, ytyp_name, ".ytyp")
+        if not ytyps:
+            existing = [p.name for p in out_dir.iterdir() if p.is_file()] or ["(nichts)"]
+            raise RuntimeError(
+                f"Der Export hat keine .ytyp fuer '{ytyp_name}' erzeugt. "
+                f"Im Zielverzeichnis liegt: {', '.join(existing)}. "
+                "Ohne Archetyp-Definition ist der Prop im Spiel nicht spawnbar."
+            )
+        written += ytyps
 
     for path in written:
         log(f"  geschrieben: {path.name} ({path.stat().st_size} Bytes)")
@@ -668,15 +804,27 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
     retarget_collision(drawable, lod_meshes, job["collision"])
     apply_lod_distances(drawable, job["lod_distances"])
 
+    # Erst nach der Kollision: create_ytyp liest am Drawable ab, ob Kollision
+    # und Texturen eingebettet sind, und setzt die Archetyp-Felder danach.
+    ytyp_settings = job.get("ytyp") or {}
+    ytyp_name = None
+    if ytyp_settings.get("enabled", True):
+        ytyp_name = create_ytyp(drawable, ytyp_settings)
+
     out_dir = Path(job["output_dir"])
-    export(drawable, out_dir, fmt, version)
+    export(drawable, out_dir, fmt, version, ytyp_name)
     log(f"Export nach {out_dir}")
 
     previews: list[dict] = []
     if render_dir is not None:
         previews = extract_lod_geometry(name, lod_meshes, Path(render_dir) / name)
 
-    return {"name": name, "previews": previews, "dimensions": dimensions}
+    return {
+        "name": name,
+        "previews": previews,
+        "dimensions": dimensions,
+        "ytyp": ytyp_name,
+    }
 
 
 def main(argv: list[str]) -> int:

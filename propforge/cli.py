@@ -188,6 +188,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
             print(pf_inspect.parse_drawable(path).summary())
             print()
 
+    ytyps = pf_inspect.find_ytyps(build_dir)
+    if ytyps:
+        print(f"{len(ytyps)} Archetyp-Definition(en):\n")
+        for path in ytyps:
+            print(pf_inspect.parse_ytyp(path).summary())
+            print()
+
     print("--- Abgleich mit der Konfiguration ---")
     return _report(pf_verify.verify(config, build_dir))
 

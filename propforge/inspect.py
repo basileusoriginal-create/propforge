@@ -164,3 +164,105 @@ def parse_drawable(path: str | Path) -> DrawableInfo:
 
 def find_drawables(build_dir: str | Path) -> list[Path]:
     return sorted(Path(build_dir).rglob("*.ydr.xml"))
+
+
+# --- Archetypen (.ytyp.xml) --------------------------------------------------
+#
+# Anders als die .ydr traegt die .ytyp die Feldnamen des Spiels selbst
+# (camelCase: lodDist, assetName, textureDictionary). Weil diese Stufe nicht
+# gegen eine echte Datei entwickelt werden konnte, sucht der Parser die Felder
+# gross-/kleinschreibungsunabhaengig und an beliebiger Tiefe. Lieber
+# nachsichtig lesen als am ersten Schreibweisenunterschied scheitern.
+
+
+@dataclass
+class ArchetypeInfo:
+    name: str
+    asset_name: str
+    asset_type: str
+    lod_dist: float
+    flags: int
+    texture_dictionary: str
+    physics_dictionary: str
+
+
+@dataclass
+class YtypInfo:
+    name: str
+    archetypes: list[ArchetypeInfo] = field(default_factory=list)
+
+    def summary(self) -> str:
+        lines = [f"{self.name} ({len(self.archetypes)} Archetyp(en))"]
+        for a in self.archetypes:
+            lines.append(
+                f"  {a.name:<20} asset={a.asset_name} typ={a.asset_type} "
+                f"lodDist={a.lod_dist:g} flags={a.flags}"
+            )
+            lines.append(
+                f"  {'':<20} txd='{a.texture_dictionary}' "
+                f"physics='{a.physics_dictionary}'"
+            )
+        return "\n".join(lines)
+
+
+def _child(node: ET.Element, tag: str) -> ET.Element | None:
+    """Direktes Kind, Gross-/Kleinschreibung egal."""
+    wanted = tag.lower()
+    for child in node:
+        if child.tag.lower() == wanted:
+            return child
+    return None
+
+
+def _text(node: ET.Element, tag: str, default: str = "") -> str:
+    """Feldwert - egal ob als Elementtext oder als value-Attribut geschrieben."""
+    found = _child(node, tag)
+    if found is None:
+        return default
+    if found.text and found.text.strip():
+        return found.text.strip()
+    return found.attrib.get("value", default)
+
+
+def _number(node: ET.Element, tag: str, default: float = 0.0) -> float:
+    try:
+        return float(_text(node, tag, str(default)))
+    except ValueError:
+        return default
+
+
+def parse_ytyp(path: str | Path) -> YtypInfo:
+    """Liest eine `.ytyp.xml` und extrahiert die Archetypen."""
+    path = Path(path)
+    try:
+        root = ET.parse(path).getroot()
+    except ET.ParseError as exc:
+        raise InspectError(f"{path.name} ist kein gueltiges XML: {exc}") from exc
+
+    if root.tag.lower() != "cmaptypes":
+        raise InspectError(
+            f"{path.name}: Wurzelelement ist '{root.tag}', erwartet 'CMapTypes'."
+        )
+
+    container = _child(root, "archetypes")
+    items = list(container) if container is not None else []
+
+    info = YtypInfo(name=_text(root, "name", path.name.split(".")[0]))
+    for item in items:
+        info.archetypes.append(
+            ArchetypeInfo(
+                name=_text(item, "name"),
+                asset_name=_text(item, "assetName"),
+                asset_type=_text(item, "assetType"),
+                lod_dist=_number(item, "lodDist"),
+                flags=int(_number(item, "flags")),
+                texture_dictionary=_text(item, "textureDictionary"),
+                physics_dictionary=_text(item, "physicsDictionary"),
+            )
+        )
+
+    return info
+
+
+def find_ytyps(build_dir: str | Path) -> list[Path]:
+    return sorted(Path(build_dir).rglob("*.ytyp.xml"))

@@ -9,7 +9,14 @@ import pytest
 
 from propforge import inspect as pf_inspect
 from propforge import verify as pf_verify
-from propforge.config import CollisionSettings, LodSettings, PipelineConfig, PropSpec, TextureSet
+from propforge.config import (
+    CollisionSettings,
+    LodSettings,
+    PipelineConfig,
+    PropSpec,
+    TextureSet,
+    YtypSettings,
+)
 from propforge.validate import Level
 
 
@@ -198,6 +205,9 @@ class TestVerifyDrawable:
 
 class TestVerifyPipeline:
     def _config(self, workdir, **kwargs):
+        # Die ytyp wird in tests/test_ytyp.py geprueft. Hier stoert ihre
+        # Abwesenheit nur, deshalb ist sie abgeschaltet.
+        kwargs.setdefault("ytyp", YtypSettings(enabled=False))
         return PipelineConfig(
             resource_name="r", author="a", workdir=workdir,
             props=[make_spec(**kwargs)], export_format="CWXML",

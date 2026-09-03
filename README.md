@@ -21,7 +21,7 @@ automatisierbar. Genau die deckt dieses Repo ab.
 | `validate` | Namen, Texturmaße, LOD-Konsistenz, Shader-Sampler-Abgleich | überall |
 | `textures` | Zweierpotenz-Resize, Specular aus Roughness/Metallic, OpenGL→DirectX-Normalmap, DDS via texconv | überall (DDS: Windows) |
 | `jobs` | Prop-Definitionen zu Job-JSON für Blender | überall |
-| `build` | Blender headless: Import, Cleanup, LOD-Kette, Material, Drawable, Kollision, Export | Linux (CWXML) / Windows (NATIVE) |
+| `build` | Blender headless: Import, Cleanup, LOD-Kette, Material, Drawable, Kollision, Archetyp (.ytyp), Export | Linux (CWXML) / Windows (NATIVE) |
 | `verify` | liest den Export zurück und gleicht ihn gegen die Konfiguration ab | überall |
 | `pack` | stream/-Ordner plus fxmanifest.lua | überall |
 
@@ -32,10 +32,12 @@ dazwischen.
 
 Ein CodeWalker-`.ydr.xml` ist reiner Text und enthält alles, was die Pipeline
 versprochen hat: LOD-Stufen, Sichtweiten, Shader, eingebettete Texturen,
-Kollision. `propforge verify` parst den Export zurück und meldet, wenn er von
-der Konfiguration abweicht — eine fehlende LOD-Stufe, ein nicht belegter
-Sampler, eine Sichtweite, die nicht durchgereicht wurde, eine Textur, die keine
-Zweierpotenz ist.
+Kollision. Dasselbe gilt für die `.ytyp.xml` mit der Archetyp-Definition.
+`propforge verify` parst beides zurück und meldet, wenn es von der
+Konfiguration abweicht — eine fehlende LOD-Stufe, ein nicht belegter Sampler,
+eine Sichtweite, die nicht durchgereicht wurde, eine Textur, die keine
+Zweierpotenz ist, ein Archetyp, der auf eine andere `.ydr` zeigt als die
+gebaute.
 
 Das ersetzt keinen Blick ins Spiel. Es fängt aber die gesamte Klasse von
 Fehlern ab, bei denen der Export stillschweigend etwas wegläßt — und genau die
@@ -78,8 +80,8 @@ zeigt das vollständige Blender-Log; das gebaute Asset liegt als Artefakt
   Strukturen (Geländer, Antennen) fallen niedrige LODs auseinander.
 - **Vertex-Painting.** Sollumz erwartet für korrekte Beleuchtung Vertex-Farben
   (grün innen, rot außen). Noch nicht implementiert.
-- **ytyp-Erzeugung.** Aktuell wird ein vorhandenes ytyp nur eingepackt, nicht
-  generiert.
+- **Mehrere Props in einer ytyp.** Jeder Prop bekommt seine eigene
+  Archetyp-Definition. Für große Packs wäre eine gemeinsame ytyp sparsamer.
 
 ## Voraussetzungen
 
@@ -102,6 +104,23 @@ python -m propforge.cli run      pipeline.toml   # alles nacheinander
 
 Konfiguration: siehe `pipeline.toml`.
 
+Die Archetyp-Definition entsteht automatisch mit sinnvollen Vorgaben. Wer sie
+anpassen will:
+
+```toml
+[[prop]]
+name = "pf_desk"
+# ...
+
+[prop.ytyp]
+enabled = true            # false: keine .ytyp erzeugen
+name = "pf_desk_ityp"     # Vorgabe: "<prop>_ityp"
+lod_dist = 500.0          # Vorgabe: die größte LOD-Sichtweite des Props
+hd_texture_dist = 100.0
+flags = 32                # 32 = "Static", der Normalfall für einen Prop
+# texture_dictionary = "" # Vorgabe: leer, weil die Texturen in der .ydr liegen
+```
+
 ## Tests
 
 ```bash
@@ -109,9 +128,9 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-89 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
-Texturmathematik, Validierung, Packaging und die Auswertung exportierter
-CWXML-Assets.
+206 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
+die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 
 Die Blender-Stufe selbst ist **lokal nicht** automatisiert getestet: dafür
 braucht es eine Blender-Installation mit Sollumz. Genau die stellt die CI

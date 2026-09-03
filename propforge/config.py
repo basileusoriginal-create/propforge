@@ -74,6 +74,39 @@ class CollisionSettings:
     source_lod: str = "low"
 
 
+# Archetyp-Flag 6 ("Static") - Bit 5, also 32. Der uebliche Wert fuer einen
+# statischen Prop und die Vorgabe verbreiteter ytyp-Generatoren.
+ARCHETYPE_FLAG_STATIC = 32
+
+
+@dataclass
+class YtypSettings:
+    """Archetyp-Definition, die den Prop im Spiel ueberhaupt erst spawnbar macht.
+
+    Eine .ydr ist nur Geometrie. Erst der Archetyp in einer .ytyp gibt ihr
+    einen Namen, unter dem sie in einer .ymap oder per Script referenziert
+    werden kann.
+    """
+
+    enabled: bool = True
+    # Name der ytyp selbst. Leer = "<prop>_ityp".
+    #
+    # Bewusst nicht gleich dem Archetypnamen: die ytyp und die Archetypen
+    # darin sind zwei getrennte Namensraeume, und Rockstar haelt sie ebenfalls
+    # auseinander. Gleiche Namen sind schwer zu lesen und bei Kollisionen im
+    # Serverbetrieb schwer zu finden.
+    name: str | None = None
+    # Entfernung, ab der das Spiel den Prop nicht mehr laedt. `None` leitet
+    # den Wert aus der groessten LOD-Sichtweite ab - alles andere waere
+    # widerspruechlich: Geometrie fuer 500 m, aber Ausblenden bei 200 m.
+    lod_dist: float | None = None
+    hd_texture_dist: float = 100.0
+    flags: int = ARCHETYPE_FLAG_STATIC
+    # Name der .ytd. `None` = automatisch: leer bei eingebetteten Texturen
+    # (die liegen in der .ydr), sonst der Propname.
+    texture_dictionary: str | None = None
+
+
 @dataclass
 class PropSpec:
     """Eine vollstaendige Prop-Definition."""
@@ -109,6 +142,16 @@ class PropSpec:
     #           Props, die auf dem Boden stehen)
     #   "all"   in allen drei Achsen zentrieren
     center: str = "none"
+    ytyp: YtypSettings = field(default_factory=YtypSettings)
+
+    def ytyp_name(self) -> str:
+        return self.ytyp.name or f"{self.name}_ityp"
+
+    def archetype_lod_dist(self) -> float:
+        """Sichtweite des Archetyps - abgeleitet, wenn nicht gesetzt."""
+        if self.ytyp.lod_dist is not None:
+            return float(self.ytyp.lod_dist)
+        return float(max(self.lods.distances.values(), default=500.0))
 
     def to_job(self, workdir: Path) -> dict[str, Any]:
         """Serialisiert den Prop als Job-Dict fuer die Blender-Stufe."""
@@ -124,6 +167,14 @@ class PropSpec:
             "source_up": self.source_up,
             "center": self.center,
             "max_tris": self.max_tris,
+            "ytyp": {
+                "enabled": self.ytyp.enabled,
+                "name": self.ytyp_name(),
+                "lod_dist": self.archetype_lod_dist(),
+                "hd_texture_dist": self.ytyp.hd_texture_dist,
+                "flags": self.ytyp.flags,
+                "texture_dictionary": self.ytyp.texture_dictionary,
+            },
         }
 
 
@@ -208,6 +259,16 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
         source_lod=col_raw.get("source_lod", "low"),
     )
 
+    ytyp_raw = merged.get("ytyp", {})
+    ytyp = YtypSettings(
+        enabled=bool(ytyp_raw.get("enabled", True)),
+        name=ytyp_raw.get("name") or None,
+        lod_dist=float(ytyp_raw["lod_dist"]) if ytyp_raw.get("lod_dist") is not None else None,
+        hd_texture_dist=float(ytyp_raw.get("hd_texture_dist", 100.0)),
+        flags=int(ytyp_raw.get("flags", ARCHETYPE_FLAG_STATIC)),
+        texture_dictionary=ytyp_raw.get("texture_dictionary"),
+    )
+
     return PropSpec(
         name=name,
         mesh=resolve(mesh),
@@ -215,6 +276,7 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
         shader=merged.get("shader", "normal_spec.sps"),
         lods=lods,
         collision=collision,
+        ytyp=ytyp,
         texture_size=int(merged.get("texture_size", 1024)),
         max_tris=int(merged.get("max_tris", 10000)),
         flip_normal_green=bool(merged.get("flip_normal_green", True)),

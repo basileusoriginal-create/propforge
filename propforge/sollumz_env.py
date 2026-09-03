@@ -59,7 +59,27 @@ for dep in ({deps},):
 '''
 
 
-def import_sollumz():
+class SollumzAPI:
+    """Die Sollumz-Symbole, die die Pipeline braucht - unter festen Namen.
+
+    Bewusst ein Objekt und kein Tupel: die Rueckgabe ist im Lauf dieses
+    Projekts schon zweimal gewachsen, und beim Tupel muss dann jeder
+    Aufrufer mitwachsen. Ein vergessener Aufrufer faellt erst in der CI auf.
+    """
+
+    __slots__ = ("module", "SollumType", "LODLevel", "ArchetypeType",
+                 "AssetType", "create_shader")
+
+    def __init__(self, module_name, props, shaders):
+        self.module = module_name
+        self.SollumType = props.SollumType
+        self.LODLevel = props.LODLevel
+        self.ArchetypeType = props.ArchetypeType
+        self.AssetType = props.AssetType
+        self.create_shader = shaders.create_shader
+
+
+def import_sollumz() -> "SollumzAPI":
     """Importiert die Sollumz-Symbole, die die Pipeline braucht.
 
     Nur aus Blenders Python heraus sinnvoll. Wirft ``ImportError`` mit allen
@@ -72,7 +92,7 @@ def import_sollumz():
         try:
             props = importlib.import_module(f"{module_name}.sollumz_properties")
             shaders = importlib.import_module(f"{module_name}.ydr.shader_materials")
-            return props.SollumType, props.LODLevel, shaders.create_shader, module_name
+            return SollumzAPI(module_name, props, shaders)
         except ImportError as exc:
             errors.append(f"  {module_name}: {exc}")
 
