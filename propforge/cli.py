@@ -7,6 +7,8 @@
     propforge verify    pipeline.toml     Export gegen die Konfiguration pruefen
     propforge pack      pipeline.toml     FiveM-Resource bauen
     propforge run       pipeline.toml     alles nacheinander
+    propforge ingest    modell.glb        GLB einlesen, Konfiguration erzeugen
+    propforge materials [begriff]         Kollisionsmaterialien nachschlagen
 """
 
 from __future__ import annotations
@@ -18,6 +20,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from . import collision_materials as pf_materials
 from . import doctor as pf_doctor
 from . import ingest as pf_ingest
 from . import inspect as pf_inspect
@@ -204,6 +207,82 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return _report(pf_verify.verify(config, build_dir))
 
 
+def choose_collision_material(name: str, source: Path, preset: str | None) -> str:
+    """Ermittelt das Kollisionsmaterial fuer einen Import.
+
+    Reihenfolge: ausdrueckliche Angabe schlaegt Abfrage schlaegt Vorschlag.
+    Ohne Terminal (CI, Skript) wird nicht gefragt, sondern der Vorschlag
+    genommen und ausdruecklich gemeldet - eine Abfrage, die niemand
+    beantworten kann, blockiert sonst den Lauf.
+    """
+    if preset:
+        material = preset.upper()
+        if material not in pf_materials.BY_NAME:
+            raise SystemExit(
+                f"Kollisionsmaterial '{material}' gibt es nicht. "
+                "Liste: python -m propforge.cli materials")
+        return material
+
+    suggestion, keyword = pf_materials.suggest(name, source.stem)
+    why = f" (wegen '{keyword}' im Namen)" if keyword else " (kein Hinweis im Namen)"
+
+    if not sys.stdin.isatty():
+        print(f"Kollisionsmaterial: {suggestion}{why} - nicht nachgefragt, "
+              "kein Terminal. Mit --material anders setzen.")
+        return suggestion
+
+    print("\nKollisionsmaterial: bestimmt Schrittgeraeusche, Einschlaege und")
+    print("Bruchverhalten. Alle Materialien: docs/kollisionsmaterialien.txt")
+    print(f"Vorschlag: {suggestion}{why}")
+    print("  [Enter] uebernehmen | <NAME> setzen | ? suchen")
+
+    while True:
+        answer = input("Material> ").strip()
+        if not answer:
+            return suggestion
+        if answer.startswith("?"):
+            term = answer.lstrip("? ").strip()
+            hits = pf_materials.search(term) if term else list(pf_materials.MATERIALS)
+            for m in hits[:25]:
+                print(f"  {m.name:<28} {m.usage}")
+            if len(hits) > 25:
+                print(f"  ... und {len(hits) - 25} weitere")
+            continue
+        candidate = answer.upper()
+        if candidate in pf_materials.BY_NAME:
+            return candidate
+        print(f"  '{candidate}' gibt es nicht. Mit '?{answer}' suchen.")
+
+
+def cmd_materials(args: argparse.Namespace) -> int:
+    """Listet die Kollisionsmaterialien oder schreibt sie als Textdatei."""
+    if args.write:
+        target = Path(args.write)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(pf_materials.render_reference(), encoding="utf-8")
+        print(f"{len(pf_materials.MATERIALS)} Materialien -> {target}")
+        return 0
+
+    if args.suggest:
+        material, keyword = pf_materials.suggest(args.suggest)
+        why = f"wegen '{keyword}'" if keyword else "kein Hinweis im Namen, Standard"
+        print(f"{material}  ({why})")
+        return 0
+
+    hits = pf_materials.search(args.search) if args.search else list(pf_materials.MATERIALS)
+    if not hits:
+        print(f"Nichts gefunden fuer '{args.search}'.")
+        return 1
+    category = None
+    for m in hits:
+        if m.category != category:
+            category = m.category
+            print(f"\n{category}")
+        print(f"  {m.name:<28} {m.usage}")
+    print(f"\n{len(hits)} von {len(pf_materials.MATERIALS)} Materialien.")
+    return 0
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     """Bereitet ein GLB fuer die Pipeline auf."""
     source = Path(args.source)
@@ -238,7 +317,8 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     after = mesh_target.stat().st_size / 1024 / 1024
     print(f"\nGeometrie: {before:.1f} MB -> {after:.1f} MB (Texturen ausgelagert)")
 
-    snippet = pf_ingest.config_snippet(info, mesh_target, out_dir)
+    material = choose_collision_material(name, source, args.material)
+    snippet = pf_ingest.config_snippet(info, mesh_target, out_dir, material)
     snippet_path = out_dir.parent / f"{name}.toml"
     snippet_path.write_text(snippet, encoding="utf-8")
 
@@ -289,7 +369,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--name", help="Prop-Name (Standard: Dateiname)")
     p.add_argument("--max-texture", type=int, default=2048,
                    help="Texturen auf diese Kantenlaenge begrenzen")
+    p.add_argument("--material", help="Kollisionsmaterial; ohne Angabe wird gefragt")
     p.set_defaults(func=cmd_ingest)
+
+    # materials braucht weder Konfiguration noch Quelldatei.
+    p = sub.add_parser("materials", help="Kollisionsmaterialien nachschlagen")
+    p.add_argument("search", nargs="?", help="Suchbegriff (Name, Kategorie, Beschreibung)")
+    p.add_argument("--suggest", help="Material zu einem Prop-Namen vorschlagen")
+    p.add_argument("--write", help="Liste als Textdatei schreiben")
+    p.set_defaults(func=cmd_materials)
 
     # doctor braucht keine Konfiguration - es prueft nur die Umgebung.
     p = sub.add_parser("doctor", help="Umgebung pruefen (Blender, Sollumz, szio, texconv)")

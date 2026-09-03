@@ -436,7 +436,8 @@ def _relative(path: Path, texture_dir: Path) -> Path:
         return Path(path)
 
 
-def config_snippet(info: AssetInfo, mesh_path: Path, texture_dir: Path) -> str:
+def config_snippet(info: AssetInfo, mesh_path: Path, texture_dir: Path,
+                   collision_material: str | None = None) -> str:
     """Erzeugt den [[prop]]-Block fuer die pipeline.toml.
 
     Pfade sind relativ zum Elternverzeichnis des Asset-Ordners - dort liegt die
@@ -453,6 +454,12 @@ def config_snippet(info: AssetInfo, mesh_path: Path, texture_dir: Path) -> str:
     if not info.is_centered:
         lines.append('# Ursprung lag ausserhalb des Objekts.')
         lines.append('center = "base"')
+    if collision_material:
+        lines.append("")
+        lines.append("[prop.collision]")
+        lines.append("# Bestimmt Schrittgeraeusche, Einschlaege und Bruchverhalten.")
+        lines.append("# Ohne Kollisionsmaterial verwirft der Export die Kollision.")
+        lines.append(f'material = "{collision_material}"')
     lines.append("")
     lines.append("[prop.textures]")
     base = Path(texture_dir).parent

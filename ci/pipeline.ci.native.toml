@@ -70,6 +70,11 @@ source_up = "y"
 max_tris = 2923
 center = "base"
 
+[prop.collision]
+# Der Tisch ist aus Holz - das bestimmt Schrittgeraeusche, Einschlaege
+# und Bruchverhalten. DEFAULT klaenge nach nichts Bestimmtem.
+material = "WOOD_SOLID_MEDIUM"
+
 [prop.textures]
 diffuse = "assets/pf_desk_albedo.png"
 roughness = "assets/pf_desk_roughness.png"

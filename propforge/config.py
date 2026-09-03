@@ -244,8 +244,28 @@ class PipelineConfig:
         )
 
 
+def _merge(defaults: dict[str, Any], raw: dict[str, Any]) -> dict[str, Any]:
+    """Fuehrt Vorgaben und Prop-Eintrag zusammen - Untertabellen eingeschlossen.
+
+    Ein flaches ``{**defaults, **raw}`` ersetzt eine Untertabelle komplett:
+    wer in ``[prop.collision]`` nur das Material setzt, verliert lautlos
+    ``kind``, ``flag_preset`` und ``source_lod`` aus ``[defaults.collision]``.
+    Genau das ist beim Tisch passiert - aus der konfigurierten konvexen Huelle
+    wurde wieder volle Dreieckskollision, ohne dass irgendwo etwas stand.
+
+    Eine Ebene tief reicht: tiefer verschachtelt ist die Konfiguration nicht.
+    """
+    merged = dict(defaults)
+    for key, value in raw.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    return merged
+
+
 def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -> PropSpec:
-    merged: dict[str, Any] = {**defaults, **raw}
+    merged: dict[str, Any] = _merge(defaults, raw)
 
     try:
         name = merged["name"]

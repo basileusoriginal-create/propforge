@@ -1,0 +1,236 @@
+KOLLISIONSMATERIALIEN FUER GTA V
+========================================================================
+
+Das Kollisionsmaterial bestimmt Schrittgeraeusche, Einschlagpartikel,
+Reifengrip und Bruchverhalten. Es ist Pflicht: ohne Kollisionsmaterial
+verwirft der Export die Kollision, und man laeuft durch den Prop.
+
+185 Materialien, gegliedert nach Verwendung.
+Setzen ueber  [prop.collision] material = "NAME"
+
+BODEN & STEIN
+------------------------------------------------------------------------
+  DEFAULT                      Neutraler Standard. Passt ueberall, klingt nach nichts Bestimmtem. Gute Wahl, solange nichts Besseres feststeht.
+  CONCRETE                     Beton: Gehwege, Fundamente, Poller, Betonmoebel.
+  CONCRETE_POTHOLE             Beton mit Schlagloechern - fuer Fahrbahnschaeden.
+  CONCRETE_DUSTY               Staubiger Beton, Baustelle und Industriehalle.
+  TARMAC                       Asphalt, Strassenbelag.
+  TARMAC_PAINTED               Asphalt mit Markierung, etwa Parkplatzflaechen.
+  TARMAC_POTHOLE               Schadhafter Asphalt.
+  RUMBLE_STRIP                 Ruettelstreifen am Fahrbahnrand.
+  BREEZE_BLOCK                 Hohlblockstein, einfache Mauern.
+  ROCK                         Fels und Naturstein, Klippen, Findlinge.
+  ROCK_MOSSY                   Bemooster Fels, feuchte Umgebung.
+  STONE                        Naturstein, Mauerwerk, Steinstufen.
+  COBBLESTONE                  Kopfsteinpflaster.
+  BRICK                        Ziegel und Klinker.
+  MARBLE                       Marmor: Lobby, Bad, edle Boeden. Klingt hart und hell.
+  PAVING_SLAB                  Gehwegplatten, Terrassenplatten.
+  SANDSTONE_SOLID              Massiver Sandstein.
+  SANDSTONE_BRITTLE            Bruechiger Sandstein, broeselt beim Beschuss.
+  CONCRETE_PAVEMENT            Betongehweg - Variante fuer Strassenraender.
+  BRICK_PAVEMENT               Ziegelpflaster.
+  METAL_SOLID_ROAD_SURFACE     Metallfahrbahn, etwa Bruecken- und Rampenbelag.
+  STUNT_RAMP_SURFACE           Stunt-Rampen mit erhoehtem Grip.
+  ROCK_NOINST                  Fels ohne prozedurale Bewuchs-Instanzen. Fuer Felsen, auf denen kein Gras wachsen soll.
+
+LOSE BOEDEN
+------------------------------------------------------------------------
+  SAND_LOOSE                   Loser Sand, Strand.
+  SAND_COMPACT                 Fester Sand, befahrbar.
+  SAND_WET                     Nasser Sand an der Wasserlinie.
+  SAND_TRACK                   Sandpiste, ausgefahren.
+  SAND_UNDERWATER              Sandgrund unter Wasser.
+  SAND_DRY_DEEP                Tiefer Trockensand, Fahrzeuge graben sich ein.
+  SAND_WET_DEEP                Tiefer Nassand.
+  ICE                          Eis, kaum Grip.
+  ICE_TARMAC                   Vereiste Fahrbahn.
+  SNOW_LOOSE                   Pulverschnee.
+  SNOW_COMPACT                 Festgefahrener Schnee.
+  SNOW_DEEP                    Tiefschnee.
+  SNOW_TARMAC                  Schneebedeckte Fahrbahn.
+  GRAVEL_SMALL                 Feiner Schotter, Wege.
+  GRAVEL_LARGE                 Grober Schotter.
+  GRAVEL_DEEP                  Tiefer Schotter, Kiesgrube.
+  GRAVEL_TRAIN_TRACK           Gleisschotter.
+  DIRT_TRACK                   Feldweg, Erdpiste.
+  MUD_HARD                     Getrockneter Schlamm.
+  MUD_POTHOLE                  Schlammloch.
+  MUD_SOFT                     Weicher Schlamm.
+  MUD_UNDERWATER               Schlammgrund unter Wasser.
+  MUD_DEEP                     Tiefer Schlamm, Fahrzeuge bleiben stecken.
+  MARSH                        Sumpf.
+  MARSH_DEEP                   Tiefer Sumpf.
+  SOIL                         Muttererde, Beet.
+  CLAY_HARD                    Harter Lehm.
+  CLAY_SOFT                    Weicher Lehm.
+  PUDDLE                       Pfuetze - duenne Wasserschicht auf festem Grund.
+
+VEGETATION
+------------------------------------------------------------------------
+  GRASS_LONG                   Hohes Gras, Wiese.
+  GRASS                        Normaler Rasen.
+  GRASS_SHORT                  Kurz gemaehter Rasen, Sportplatz.
+  HAY                          Heu, Strohballen.
+  BUSHES                       Busch- und Strauchwerk, durchlaessig.
+  BUSHES_NOINST                Busch ohne prozedurale Instanzen.
+  TWIGS                        Zweige, Reisig.
+  LEAVES                       Laub.
+  WOODCHIPS                    Rindenmulch, Hackschnitzel.
+  TREE_BARK                    Baumrinde - fuer Staemme.
+
+METALL
+------------------------------------------------------------------------
+  METAL_SOLID_SMALL            Kleines massives Metallteil: Griff, Beschlag, Werkzeug.
+  METAL_SOLID_MEDIUM           Mittleres Metallteil: Metallmoebel, Schrank, Maschinengehaeuse. Der uebliche Metall-Standard.
+  METAL_SOLID_LARGE            Grosses Metallteil: Container, Traeger, Tresorwand.
+  METAL_HOLLOW_SMALL           Kleines Hohlmetall: Dose, Rohr, Schild. Klingt scheppernd.
+  METAL_HOLLOW_MEDIUM          Muelltonne, Fass, Lueftungskanal.
+  METAL_HOLLOW_LARGE           Grosser Hohlkoerper: Silo, Tank, Wellblechhalle.
+  METAL_CHAINLINK_SMALL        Maschendraht, kleines Stueck.
+  METAL_CHAINLINK_LARGE        Maschendrahtzaun, grossflaechig.
+  METAL_CORRUGATED_IRON        Wellblech.
+  METAL_GRILLE                 Gitterrost, Lueftungsgitter.
+  METAL_RAILING                Gelaender, Handlauf, Absperrung.
+  METAL_DUCT                   Lueftungskanal, duennwandig.
+  METAL_GARAGE_DOOR            Garagentor, Rolltor.
+  METAL_MANHOLE                Kanaldeckel.
+
+HOLZ
+------------------------------------------------------------------------
+  WOOD_SOLID_SMALL             Kleines Massivholz: Latte, Stuhlbein, Werkzeuggriff.
+  WOOD_SOLID_MEDIUM            Mittleres Massivholz: Tisch, Bank, Regal, Kiste. Der uebliche Holz-Standard fuer Moebel.
+  WOOD_SOLID_LARGE             Grosses Massivholz: Balken, Baumstamm, Steg.
+  WOOD_SOLID_POLISHED          Poliertes Holz: Klavier, Theke, Edelmoebel.
+  WOOD_FLOOR_DUSTY             Staubiger Dielenboden, Dachboden und Scheune.
+  WOOD_HOLLOW_SMALL            Kleines Hohlholz: duenne Kiste, Schublade.
+  WOOD_HOLLOW_MEDIUM           Hohle Holzkiste, Sperrholzmoebel.
+  WOOD_HOLLOW_LARGE            Grosser Hohlkoerper aus Holz: Verschlag, Bretterbude.
+  WOOD_CHIPBOARD               Spanplatte, billige Moebel.
+  WOOD_OLD_CREAKY              Altes knarzendes Holz: Ruine, morscher Steg.
+  WOOD_HIGH_DENSITY            Sehr dichtes Holz, haelt mehr aus.
+  WOOD_LATTICE                 Holzgitter, Spalier, Lattenzaun.
+  WOOD_HIGH_FRICTION           Holz mit erhoehtem Grip - fuer Flaechen, auf denen nichts rutschen soll.
+  VFX_WOOD_BEER_BARREL         Bierfass mit eigenem Effekt beim Zerstoeren.
+
+BAU- & KUNSTSTOFFE
+------------------------------------------------------------------------
+  CERAMIC                      Keramik: Fliesen, Sanitaer, Geschirr.
+  ROOF_TILE                    Dachziegel.
+  ROOF_FELT                    Dachpappe, Bitumenbahn.
+  FIBREGLASS                   Massives GFK: Bootsrumpf, Verkleidung.
+  FIBREGLASS_HOLLOW            Hohles GFK, duenne Schale.
+  TARPAULIN                    Plane, Abdeckung, Zeltbahn.
+  PLASTIC                      Massiver Kunststoff: Gehaeuse, Gartenmoebel.
+  PLASTIC_HOLLOW               Hohler Kunststoff: Muelltonne, Kanister, Spielzeug.
+  PLASTIC_HIGH_DENSITY         Harter technischer Kunststoff, Industrieteil.
+  PLASTIC_CLEAR                Klarer Kunststoff, massiv.
+  PLASTIC_HOLLOW_CLEAR         Klarer Hohlkunststoff: Flasche, Becher.
+  PLASTIC_HIGH_DENSITY_CLEAR   Harter klarer Kunststoff, Schutzscheibe.
+  RUBBER                       Gummi: Matte, Puffer, Reifen.
+  RUBBER_HOLLOW                Hohler Gummi: Ball, Schlauch.
+  PLASTER_SOLID                Massiver Putz, verputzte Wand.
+  PLASTER_BRITTLE              Bruechiger Putz, Rigips - zerbroeselt beim Beschuss.
+
+INNENAUSBAU & TEXTIL
+------------------------------------------------------------------------
+  LINOLEUM                     Linoleumboden, Kueche und Flur.
+  LAMINATE                     Laminatboden.
+  CARPET_SOLID                 Teppichboden.
+  CARPET_SOLID_DUSTY           Staubiger Teppich, verlassene Wohnung.
+  CARPET_FLOORBOARD            Teppich auf Dielen - klingt hohler.
+  CLOTH                        Stoff: Polster, Vorhang, Kleidung.
+  LEATHER                      Leder: Sofa, Sitz, Tasche.
+  SLATTED_BLINDS               Lamellenjalousie.
+  TVSCREEN                     Bildschirm, Monitorglas.
+
+VERPACKUNG & WEICHES
+------------------------------------------------------------------------
+  CARDBOARD_SHEET              Pappe als Flaeche.
+  CARDBOARD_BOX                Kartons - leicht, verschiebbar.
+  PAPER                        Papier, Stapel, Plakat.
+  FOAM                         Schaumstoff, Polsterung.
+  FEATHER_PILLOW               Federkissen - platzt mit Federn.
+  POLYSTYRENE                  Styropor.
+
+GLAS
+------------------------------------------------------------------------
+  GLASS_SHOOT_THROUGH          Fensterglas: Kugeln gehen durch, Scheibe zerbricht.
+  GLASS_BULLETPROOF            Panzerglas, haelt Beschuss.
+  GLASS_OPAQUE                 Undurchsichtiges Glas, Milchglas.
+  PERSPEX                      Acrylglas, Plexiglas.
+  EMISSIVE_GLASS               Leuchtendes Glas: Lampe, Leuchtreklame.
+  EMISSIVE_PLASTIC             Leuchtender Kunststoff, Lichtabdeckung.
+
+FAHRZEUG
+------------------------------------------------------------------------
+  CAR_METAL                    Fahrzeugkarosserie.
+  CAR_PLASTIC                  Stossfaenger, Verkleidung.
+  CAR_SOFTTOP                  Stoffverdeck.
+  CAR_SOFTTOP_CLEAR            Verdeckfenster.
+  CAR_GLASS_WEAK               Fahrzeugglas, zerbricht leicht.
+  CAR_GLASS_MEDIUM             Fahrzeugglas, mittlere Festigkeit.
+  CAR_GLASS_STRONG             Fahrzeugglas, robust.
+  CAR_GLASS_BULLETPROOF        Gepanzertes Fahrzeugglas.
+  CAR_GLASS_OPAQUE             Undurchsichtiges Fahrzeugglas.
+  CAR_ENGINE                   Motorblock.
+
+FLUESSIGES & ORGANISCHES
+------------------------------------------------------------------------
+  WATER                        Wasseroberflaeche.
+  BLOOD                        Blutlache.
+  OIL                          Oellache, rutschig.
+  PETROL                       Benzin - entzuendlich.
+  FRESH_MEAT                   Frisches Fleisch, Schlachthof.
+  DRIED_MEAT                   Getrocknetes Fleisch.
+  ANIMAL_DEFAULT               Standardmaterial fuer Tierkoerper.
+
+EFFEKTE
+------------------------------------------------------------------------
+  VFX_METAL_ELECTRIFIED        Metall unter Strom - Funken und Schaden.
+  VFX_METAL_WATER_TOWER        Wasserturm - laeuft aus, wenn beschossen.
+  VFX_METAL_STEAM              Metall mit Dampfaustritt.
+  VFX_METAL_FLAME              Metall mit Flammenaustritt.
+
+PHYSIK-SPEZIALFAELLE
+------------------------------------------------------------------------
+  PHYS_NO_FRICTION             Reibungsfrei - alles rutscht ab.
+  PHYS_GOLF_BALL               Golfball-Physik.
+  PHYS_TENNIS_BALL             Tennisball-Physik.
+  PHYS_CASTER                  Moebelrolle.
+  PHYS_CASTER_RUSTY            Verrostete Moebelrolle, mehr Widerstand.
+  PHYS_CAR_VOID                Aussparung fuer Fahrzeuge - Fahrzeuge fahren hindurch.
+  PHYS_PED_CAPSULE             Kollisionskapsel fuer Peds.
+  PHYS_ELECTRIC_FENCE          Elektrozaun.
+  PHYS_ELECTRIC_METAL          Stromfuehrendes Metall.
+  PHYS_BARBED_WIRE             Stacheldraht - verletzt beim Beruehren.
+  PHYS_POOLTABLE_SURFACE       Billardtuch.
+  PHYS_POOLTABLE_CUSHION       Billardbande.
+  PHYS_POOLTABLE_BALL          Billardkugel.
+  PHYS_DYNAMIC_COVER_BOUND     Deckungsvolumen fuer die KI.
+  TEMP_01                      Platzhalter von Rockstar. Nicht benutzen.
+  TEMP_02                      Platzhalter von Rockstar. Nicht benutzen.
+
+PED-KNOCHEN (NICHT FUER PROPS)
+------------------------------------------------------------------------
+  BUTTOCKS                     Ped-Trefferzone.
+  THIGH_LEFT                   Ped-Trefferzone.
+  SHIN_LEFT                    Ped-Trefferzone.
+  FOOT_LEFT                    Ped-Trefferzone.
+  THIGH_RIGHT                  Ped-Trefferzone.
+  SHIN_RIGHT                   Ped-Trefferzone.
+  FOOT_RIGHT                   Ped-Trefferzone.
+  SPINE0                       Ped-Trefferzone.
+  SPINE1                       Ped-Trefferzone.
+  SPINE2                       Ped-Trefferzone.
+  SPINE3                       Ped-Trefferzone.
+  CLAVICLE_LEFT                Ped-Trefferzone.
+  UPPER_ARM_LEFT               Ped-Trefferzone.
+  LOWER_ARM_LEFT               Ped-Trefferzone.
+  HAND_LEFT                    Ped-Trefferzone.
+  CLAVICLE_RIGHT               Ped-Trefferzone.
+  UPPER_ARM_RIGHT              Ped-Trefferzone.
+  LOWER_ARM_RIGHT              Ped-Trefferzone.
+  HAND_RIGHT                   Ped-Trefferzone.
+  NECK                         Ped-Trefferzone.
+  HEAD                         Ped-Trefferzone.

@@ -112,6 +112,12 @@ jobs:
               print('SZIO_MISSING:', exc); sys.exit(1)
           "
 
+      # Unsere Materialliste ist eine Beschreibung, Sollumz die Wirklichkeit.
+      # Laufen sie auseinander, schlaegt die Abfrage beim Import etwas vor,
+      # das es nicht gibt - oder die Preflight-Pruefung lehnt Gueltiges ab.
+      - name: Kollisionsmaterialien gegen Sollumz abgleichen
+        run: python ci/check_collision_materials.py _sollumz
+
       - name: Umgebung pruefen
         run: |
           set -o pipefail

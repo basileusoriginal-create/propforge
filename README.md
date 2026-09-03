@@ -122,6 +122,26 @@ flags = 32                # 32 = "Static", der Normalfall für einen Prop
 # texture_dictionary = "" # Vorgabe: leer, weil die Texturen in der .ydr liegen
 ```
 
+## Kollisionsmaterial
+
+Das Material bestimmt Schrittgeräusche, Einschlagpartikel, Reifengrip und
+Bruchverhalten — ein Holztisch aus `CONCRETE` klingt falsch. Und es ist
+Pflicht: ohne Kollisionsmaterial verwirft der Export die Kollision.
+
+```bash
+python -m propforge.cli materials                    # alle 185, nach Verwendung gegliedert
+python -m propforge.cli materials holz               # suchen
+python -m propforge.cli materials --suggest pf_desk  # Vorschlag zu einem Namen
+```
+
+`propforge ingest` fragt beim Import danach und schlägt anhand des Namens etwas
+vor (`desk` → `WOOD_SOLID_MEDIUM`). Ohne Terminal — CI, Skript — wird nicht
+gefragt, sondern der Vorschlag genommen und gemeldet; `--material` setzt ihn
+direkt. Die vollständige Liste mit Verwendungszweck steht in
+[`docs/kollisionsmaterialien.txt`](docs/kollisionsmaterialien.txt), erzeugt aus
+`propforge/collision_materials.py`. Die CI gleicht sie bei jedem Lauf gegen
+Sollumz ab, damit Beschreibung und Wirklichkeit nicht auseinanderlaufen.
+
 ## Test im Spiel
 
 Jede gepackte Resource bringt eine `client.lua` mit — nicht als Komfort,
@@ -149,7 +169,7 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-242 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+271 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
 Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
 die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 

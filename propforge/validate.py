@@ -14,6 +14,7 @@ from pathlib import Path
 
 from PIL import Image
 
+from . import collision_materials as pf_materials
 from .config import LOD_LEVELS, VALID_TEXTURE_SIZES, PipelineConfig, PropSpec
 
 # Archetype-Namen landen in ytyp/ymap und werden gehasht. Grossbuchstaben,
@@ -171,6 +172,20 @@ def validate_prop(spec: PropSpec) -> list[Finding]:
         if spec.collision.kind not in {"bvh", "box", "hull"}:
             add(Level.ERROR, "collision_kind",
                 f"Unbekannter Kollisionstyp '{spec.collision.kind}'. Moeglich: bvh, box, hull")
+        # Materialname vor dem Build pruefen. Ein unbekannter Name faellt
+        # sonst erst in Blender auf - nach Texturaufbereitung und Import.
+        if spec.collision.material not in pf_materials.BY_NAME:
+            hits = pf_materials.search(spec.collision.material.split("_")[0].lower())
+            tip = (" Passt vielleicht: " + ", ".join(m.name for m in hits[:5])) if hits else ""
+            add(Level.ERROR, "collision_material_unknown",
+                f"Kollisionsmaterial '{spec.collision.material}' gibt es nicht.{tip} "
+                "Vollstaendige Liste: python -m propforge.cli materials")
+        elif pf_materials.BY_NAME[spec.collision.material].category in \
+                pf_materials.UNSUITABLE_FOR_PROPS:
+            add(Level.WARNING, "collision_material_unsuitable",
+                f"'{spec.collision.material}' gehoert zur Kategorie "
+                f"'{pf_materials.BY_NAME[spec.collision.material].category}' und ist "
+                "fuer einen statischen Prop kaum je richtig.")
         if spec.collision.source_lod not in ratios:
             add(
                 Level.ERROR,
