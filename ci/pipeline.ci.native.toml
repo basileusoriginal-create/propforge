@@ -9,6 +9,10 @@ export_version = "GEN8"
 
 [defaults]
 shader = "normal_spec.sps"
+# Der Generator schreibt in Blender-Konvention (Z-up). Ohne diese Zeile
+# nimmt Blenders OBJ-Importer Y-up an und legt den Prop auf die Seite --
+# formal fehlerfrei, im Spiel unbrauchbar.
+source_up = "z"
 texture_size = 512
 max_tris = 2000
 flip_normal_green = true

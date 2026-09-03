@@ -167,3 +167,24 @@ class TestPipelineLevel:
             props=[make_spec(assets)], export_format="CWXML",
         )
         assert not validate.has_errors(validate.validate(config))
+
+
+class TestOrientation:
+    def test_default_is_y_up(self, assets):
+        # OBJ- und glTF-Konvention, also das, was Meshy und Tripo liefern.
+        assert make_spec(assets).source_up == "y"
+
+    def test_valid_values_pass(self, assets):
+        for value in ("y", "z"):
+            spec = make_spec(assets, source_up=value)
+            assert "source_up_invalid" not in codes(validate.validate_prop(spec))
+
+    def test_unknown_value_rejected(self, assets):
+        spec = make_spec(assets, source_up="x")
+        assert "source_up_invalid" in codes(validate.validate_prop(spec), validate.Level.ERROR)
+
+    def test_reaches_the_blender_job(self, assets, tmp_path):
+        # Die Orientierung muss bis in die Blender-Stufe durchgereicht werden -
+        # sonst greift sie genau dort nicht, wo sie gebraucht wird.
+        job = make_spec(assets, source_up="z").to_job(tmp_path)
+        assert job["source_up"] == "z"

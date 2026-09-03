@@ -90,6 +90,13 @@ class PropSpec:
     # Normalmap-Konvention: AI-Generatoren liefern meist OpenGL (Y+),
     # GTA V erwartet DirectX (Y-).
     flip_normal_green: bool = True
+    # Welche Achse im Quellmesh nach oben zeigt.
+    #
+    # Das ist keine Kosmetik: ein falsch orientierter Prop steht im Spiel auf
+    # der Seite, und kein Test merkt es -- die Datei ist ja formal korrekt.
+    # "y" ist die uebliche Konvention fuer OBJ und glTF und damit das, was
+    # Meshy, Tripo und Rodin liefern. "z" ist Blender-Konvention.
+    source_up: str = "y"
 
     def to_job(self, workdir: Path) -> dict[str, Any]:
         """Serialisiert den Prop als Job-Dict fuer die Blender-Stufe."""
@@ -102,6 +109,7 @@ class PropSpec:
             "lod_ratios": dict(self.lods.ordered_ratios()),
             "lod_distances": self.lods.distances,
             "collision": asdict(self.collision),
+            "source_up": self.source_up,
             "max_tris": self.max_tris,
         }
 
@@ -197,4 +205,5 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
         texture_size=int(merged.get("texture_size", 1024)),
         max_tris=int(merged.get("max_tris", 10000)),
         flip_normal_green=bool(merged.get("flip_normal_green", True)),
+        source_up=str(merged.get("source_up", "y")).lower(),
     )

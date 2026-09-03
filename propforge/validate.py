@@ -182,6 +182,15 @@ def validate_prop(spec: PropSpec) -> list[Finding]:
         add(Level.WARNING, "collision_disabled",
             "Ohne Kollision laeuft der Spieler durch den Prop hindurch.")
 
+    # --- Orientierung ---
+    if spec.source_up not in {"y", "z"}:
+        add(
+            Level.ERROR,
+            "source_up_invalid",
+            f"source_up='{spec.source_up}' ist unbekannt. Moeglich: 'y' (OBJ/glTF-"
+            "Konvention, was Meshy und Tripo liefern) oder 'z' (Blender-Konvention).",
+        )
+
     # --- Budget ---
     if spec.max_tris > 30000:
         add(Level.WARNING, "tris_high",

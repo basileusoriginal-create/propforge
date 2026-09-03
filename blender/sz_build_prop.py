@@ -61,14 +61,34 @@ LOD_ENUM = {
     "verylow": LODLevel.VERYLOW,
 }
 
-IMPORTERS = {
-    ".glb": lambda p: bpy.ops.import_scene.gltf(filepath=p),
-    ".gltf": lambda p: bpy.ops.import_scene.gltf(filepath=p),
-    ".obj": lambda p: bpy.ops.wm.obj_import(filepath=p),
-    ".fbx": lambda p: bpy.ops.import_scene.fbx(filepath=p),
-    ".ply": lambda p: bpy.ops.wm.ply_import(filepath=p),
-    ".stl": lambda p: bpy.ops.wm.stl_import(filepath=p),
+# Achsenkonvertierung beim Import.
+#
+# Blenders OBJ-Importer nimmt standardmaessig an, dass die Datei Y-up ist
+# (forward_axis="NEGATIVE_Z", up_axis="Y") - das ist fuer OBJ die uebliche
+# Konvention und stimmt fuer Meshy-, Tripo- und Rodin-Ausgaben. Fuer eine in
+# Blender-Konvention (Z-up) geschriebene Datei ist es falsch, und der Prop
+# landet um 90 Grad gedreht im Spiel, ohne dass irgendeine Pruefung anschlaegt.
+#
+# Deshalb wird die Annahme hier explizit gemacht statt stillschweigend
+# uebernommen.
+OBJ_AXES = {
+    "y": {"forward_axis": "NEGATIVE_Z", "up_axis": "Y"},
+    "z": {"forward_axis": "Y", "up_axis": "Z"},
 }
+
+# glTF ist per Spezifikation Y-up, der Importer konvertiert immer korrekt.
+# FBX, PLY und STL tragen die Information nicht verlaesslich - dort greift
+# nur der Hinweis im Log.
+IMPORTERS = {
+    ".glb": lambda p, up: bpy.ops.import_scene.gltf(filepath=p),
+    ".gltf": lambda p, up: bpy.ops.import_scene.gltf(filepath=p),
+    ".obj": lambda p, up: bpy.ops.wm.obj_import(filepath=p, **OBJ_AXES[up]),
+    ".fbx": lambda p, up: bpy.ops.import_scene.fbx(filepath=p),
+    ".ply": lambda p, up: bpy.ops.wm.ply_import(filepath=p),
+    ".stl": lambda p, up: bpy.ops.wm.stl_import(filepath=p),
+}
+
+FORMATS_IGNORING_SOURCE_UP = {".glb", ".gltf", ".fbx", ".ply", ".stl"}
 
 
 def log(msg: str) -> None:
@@ -105,13 +125,19 @@ def select_only(obj: bpy.types.Object) -> None:
 
 # --- Import und Aufraeumen --------------------------------------------------
 
-def import_mesh(path: Path) -> bpy.types.Object:
+def import_mesh(path: Path, source_up: str = "y") -> bpy.types.Object:
     suffix = path.suffix.lower()
     if suffix not in IMPORTERS:
         raise SystemExit(f"Nicht unterstuetztes Meshformat: {suffix}")
+    if source_up not in OBJ_AXES:
+        raise SystemExit(f"Unbekannte Quellorientierung: {source_up}")
+
+    if suffix in FORMATS_IGNORING_SOURCE_UP and source_up != "y":
+        log(f"Hinweis: '{suffix}' bringt seine Orientierung selbst mit, "
+            f"source_up='{source_up}' bleibt hier ohne Wirkung.")
 
     before = set(bpy.data.objects)
-    IMPORTERS[suffix](str(path))
+    IMPORTERS[suffix](str(path), source_up)
     new_meshes = [o for o in set(bpy.data.objects) - before if o.type == "MESH"]
     if not new_meshes:
         raise SystemExit(f"Keine Mesh-Objekte in {path} gefunden.")
@@ -534,11 +560,17 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
 
     reset_scene()
 
-    source = import_mesh(Path(job["mesh"]))
+    source = import_mesh(Path(job["mesh"]), job.get("source_up", "y"))
     cleanup_mesh(source)
     ensure_uvs(source)
     clamp_to_budget(source, int(job["max_tris"]))
-    log(f"LOD0: {tri_count(source)} Dreiecke")
+
+    # Die Abmessungen protokollieren. Ein auf der Seite liegender Prop ist an
+    # den Zahlen sofort erkennbar - und sonst an gar nichts, weil die
+    # exportierte Datei formal einwandfrei ist.
+    dims = source.dimensions
+    log(f"LOD0: {tri_count(source)} Dreiecke, "
+        f"Abmessungen B{dims.x:.2f} x T{dims.y:.2f} x H{dims.z:.2f} m")
 
     # Material VOR den LOD-Kopien anlegen. Mesh-Datenblöcke tragen ihre
     # Materialliste mit, wenn sie kopiert werden - andersherum bekommen die
