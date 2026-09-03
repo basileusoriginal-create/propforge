@@ -78,8 +78,9 @@ zeigt das vollständige Blender-Log; das gebaute Asset liegt als Artefakt
   ordentliches Unwrap.
 - **Silhouette der LOD-Stufen.** Decimate ist blind. Bei Props mit dünnen
   Strukturen (Geländer, Antennen) fallen niedrige LODs auseinander.
-- **Vertex-Painting.** Sollumz erwartet für korrekte Beleuchtung Vertex-Farben
-  (grün innen, rot außen). Noch nicht implementiert.
+- **Vertex-Painting.** Die Pipeline legt die vom Shader verlangten
+  Farb-Attribute an und setzt sie auf neutrales Weiß. Eine gestaltete
+  Bemalung (grün innen, rot außen) für weichere Beleuchtung bleibt Handarbeit.
 - **Mehrere Props in einer ytyp.** Jeder Prop bekommt seine eigene
   Archetyp-Definition. Für große Packs wäre eine gemeinsame ytyp sparsamer.
 
@@ -168,6 +169,14 @@ Metall im Spiel wie Plastik.
 **Normalmap-Green-Flip.** Generatoren geben OpenGL-Konvention (Y+) aus, RAGE
 erwartet DirectX (Y-). Der Fehler äußert sich in Beleuchtung, die nach innen
 statt nach außen wölbt — und fällt oft erst spät auf.
+
+**UV-Maps und Farb-Attribute nach Sollumz-Konvention.** Sollumz sucht die
+Vertexdaten unter festen Namen — `UVMap 0`, `Color 1`. Heißt die UV-Map wie bei
+Blender üblich `UVMap`, überspringt der Vertexpuffer-Bauer sie stillschweigend,
+und die exportierte Geometrie hat kein `TexCoord0`, obwohl der Shader es
+deklariert. Sollumz warnt ins Log und exportiert trotzdem. Normalerweise
+erledigt das der Operator `sollumz.createshadermaterial`; wer wie diese
+Pipeline `create_shader` direkt aufruft, muss den Schritt selbst nachziehen.
 
 **Kollision aus einem niedrigen LOD.** `sollumz.converttodrawable` baut die
 eingebettete Kollision immer aus LOD0. Bei 10.000 Dreiecken sind das 10.000

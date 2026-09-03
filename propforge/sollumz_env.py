@@ -68,15 +68,18 @@ class SollumzAPI:
     """
 
     __slots__ = ("module", "SollumType", "LODLevel", "ArchetypeType",
-                 "AssetType", "create_shader")
+                 "AssetType", "create_shader", "mesh_helper")
 
-    def __init__(self, module_name, props, shaders):
+    def __init__(self, module_name, props, shaders, mesh_helper):
         self.module = module_name
         self.SollumType = props.SollumType
         self.LODLevel = props.LODLevel
         self.ArchetypeType = props.ArchetypeType
         self.AssetType = props.AssetType
         self.create_shader = shaders.create_shader
+        # Ganzes Modul statt einzelner Funktionen: hier liegen die Helfer fuer
+        # UV-Maps und Farb-Attribute, und davon werden es eher mehr.
+        self.mesh_helper = mesh_helper
 
 
 def import_sollumz() -> "SollumzAPI":
@@ -92,7 +95,8 @@ def import_sollumz() -> "SollumzAPI":
         try:
             props = importlib.import_module(f"{module_name}.sollumz_properties")
             shaders = importlib.import_module(f"{module_name}.ydr.shader_materials")
-            return SollumzAPI(module_name, props, shaders)
+            mesh_helper = importlib.import_module(f"{module_name}.tools.meshhelper")
+            return SollumzAPI(module_name, props, shaders, mesh_helper)
         except ImportError as exc:
             errors.append(f"  {module_name}: {exc}")
 

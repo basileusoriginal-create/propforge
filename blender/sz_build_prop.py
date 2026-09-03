@@ -48,6 +48,7 @@ except ImportError:  # Notfallpfad, falls das Repo-Layout nicht mitgereicht wurd
                     ArchetypeType=props.ArchetypeType,
                     AssetType=props.AssetType,
                     create_shader=shaders.create_shader,
+                    mesh_helper=importlib.import_module(f"{module_name}.tools.meshhelper"),
                 )
             except ImportError as exc:
                 errors.append(f"  {module_name}: {exc}")
@@ -67,6 +68,7 @@ ArchetypeType = _sz.ArchetypeType
 AssetType = _sz.AssetType
 create_shader = _sz.create_shader
 SOLLUMZ_MODULE = _sz.module
+MESH = _sz.mesh_helper
 
 
 LOD_ENUM = {
@@ -281,6 +283,87 @@ def ensure_uvs(obj: bpy.types.Object) -> bool:
     bpy.ops.uv.smart_project(angle_limit=1.15, island_margin=0.02)
     bpy.ops.object.mode_set(mode="OBJECT")
     return True
+
+
+# --- Sollumz-Namenskonvention -----------------------------------------------
+
+def align_mesh_attributes(mesh: bpy.types.Mesh, label: str = "") -> None:
+    """Bringt UV-Maps und Farb-Attribute auf die Namen, die Sollumz erwartet.
+
+    Das ist kein Schoenheitsschritt, sondern der Unterschied zwischen einem
+    sichtbaren und einem unsichtbaren Prop.
+
+    Sollumz sucht die Vertexdaten unter festen Namen: die erste UV-Map heisst
+    ``UVMap 0`` (mit Leerzeichen), das erste Farb-Attribut ``Color 1``. Heisst
+    die UV-Map wie bei Blender ueblich ``UVMap``, findet der Vertexpuffer-Bauer
+    sie nicht und ueberspringt sie stillschweigend - die exportierte Geometrie
+    hat dann kein ``TexCoord0``, obwohl der Shader es deklariert. Sollumz
+    schreibt dazu eine Warnung ins Log und exportiert trotzdem.
+
+    Normalerweise erledigt das der Operator ``sollumz.createshadermaterial``
+    ueber ``post_create_shader_update_object``. Diese Pipeline ruft
+    ``create_shader`` direkt auf und haengt das Material selbst an - damit
+    fiel dieser Schritt unter den Tisch. Hier wird dieselbe Reihenfolge
+    nachgezogen: erst umbenennen, was da ist, dann ergaenzen, was fehlt.
+
+    Welche Indizes ueberhaupt gebraucht werden, leitet Sollumz aus dem Shader
+    des Materials ab. Deshalb muss das Material am Mesh haengen, bevor das
+    hier laeuft.
+    """
+    MESH.mesh_rename_uv_maps_by_order(mesh)
+    MESH.mesh_rename_color_attrs_by_order(mesh)
+    MESH.mesh_add_missing_uv_maps(mesh)
+    added_colors = MESH.mesh_add_missing_color_attrs(mesh)
+
+    # Neu angelegte Farb-Attribute ausdruecklich auf Weiss setzen.
+    #
+    # Blenders Vorgabewert fuer ein frisches BYTE_COLOR-Attribut ist nicht
+    # dokumentiert und je nach Version verschieden. Schwarz waere hier fatal:
+    # die Vertexfarbe geht multiplikativ in die Beleuchtung ein, der Prop
+    # waere im Spiel pechschwarz. Weiss ist neutral.
+    for index in added_colors:
+        name = MESH.get_color_attr_name(index)
+        attr = mesh.color_attributes.get(name)
+        if attr is None:
+            continue
+        attr.data.foreach_set("color_srgb", [1.0] * (len(attr.data) * 4))
+        log(f"  {label}Farb-Attribut '{name}' angelegt und auf Weiss gesetzt.")
+
+
+def check_mesh_attributes(mesh: bpy.types.Mesh, label: str = "") -> None:
+    """Prueft nach, ob wirklich alles da ist, was der Shader braucht.
+
+    Sollumz meldet fehlende Attribute nur als Warnung im Log und exportiert
+    weiter. Genau so entsteht eine formal einwandfreie Datei, die im Spiel
+    nichts anzeigt. Hier wird daraus ein Abbruch.
+    """
+    problems = []
+
+    for index in sorted(MESH.get_mesh_used_texcoords_indices(mesh)):
+        name = MESH.get_uv_map_name(index)
+        if name not in mesh.uv_layers:
+            problems.append(f"UV-Map '{name}' fehlt")
+
+    for index in sorted(MESH.get_mesh_used_colors_indices(mesh)):
+        name = MESH.get_color_attr_name(index)
+        attr = mesh.color_attributes.get(name)
+        if attr is None:
+            problems.append(f"Farb-Attribut '{name}' fehlt")
+        elif attr.domain != "CORNER" or attr.data_type != "BYTE_COLOR":
+            problems.append(
+                f"Farb-Attribut '{name}' hat Format {attr.domain}/{attr.data_type}, "
+                "gebraucht wird CORNER/BYTE_COLOR")
+
+    if problems:
+        raise RuntimeError(
+            f"{label}Das Mesh '{mesh.name}' erfuellt die Sollumz-Namenskonvention nicht: "
+            + "; ".join(problems)
+            + ". Der Export waere formal in Ordnung und im Spiel unsichtbar."
+        )
+
+    log(f"  {label}Vertexdaten: "
+        f"UV {', '.join(l.name for l in mesh.uv_layers) or '-'} | "
+        f"Farben {', '.join(a.name for a in mesh.color_attributes) or '-'}")
 
 
 # --- LODs -------------------------------------------------------------------
@@ -790,6 +873,12 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
     # "has no Sollumz materials! Aborting..." ab. Genau so ist es passiert.
     build_material(job, source)
 
+    # Erst jetzt moeglich: welche UV-Maps und Farb-Attribute gebraucht werden,
+    # steht im Shader des Materials. Und zwingend VOR den LOD-Kopien - die
+    # erben die Attribute mit, andersherum muesste jede einzeln nachbessern.
+    align_mesh_attributes(source.data)
+    check_mesh_attributes(source.data, "LOD0: ")
+
     # LOD-Meshes vor der Drawable-Konvertierung erzeugen, damit die
     # Decimate-Hilfsobjekte die Sollumz-Hierarchie nicht verschmutzen.
     lod_meshes: dict[str, bpy.types.Mesh] = {}
@@ -799,6 +888,14 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
         log(f"  LOD {lod_key:<8} ratio {float(ratio):.2f} -> {len(mesh.polygons)} Faces")
 
     ensure_lod_materials(lod_meshes, source)
+
+    # Und jede Stufe einzeln nachpruefen. Der Decimate-Modifikator soll
+    # Attribute mitnehmen - "soll" ist in diesem Projekt aber kein Beleg,
+    # und eine LOD-Stufe ohne UVs faellt sonst erst im Spiel auf, wenn man
+    # weit genug weggeht.
+    for lod_key, mesh in lod_meshes.items():
+        align_mesh_attributes(mesh, f"LOD {lod_key}: ")
+        check_mesh_attributes(mesh, f"LOD {lod_key}: ")
 
     configure_conversion(job)
     before = set(bpy.data.objects)
