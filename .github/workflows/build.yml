@@ -116,7 +116,9 @@ jobs:
           which convert magick || sudo apt-get install -y --no-install-recommends imagemagick
 
       - name: Testasset erzeugen
-        run: python tools/make_testasset.py --out ci/assets
+        run: |
+          python tools/make_testasset.py --out ci/assets --shape sphere  --name pf_testprop
+          python tools/make_testasset.py --out ci/assets --shape torture --name pf_rig
 
       - name: Pipeline durchlaufen
         run: |
@@ -206,7 +208,8 @@ jobs:
       - name: Pipeline durchlaufen
         run: |
           pip install -r requirements.txt
-          python tools/make_testasset.py --out ci/assets
+          python tools/make_testasset.py --out ci/assets --shape sphere  --name pf_testprop
+          python tools/make_testasset.py --out ci/assets --shape torture --name pf_rig
           python -m propforge.cli doctor --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log
           python -m propforge.cli run ci/pipeline.ci.native.toml --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

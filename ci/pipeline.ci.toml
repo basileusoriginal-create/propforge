@@ -40,3 +40,17 @@ diffuse = "assets/pf_testprop_albedo.png"
 normal = "assets/pf_testprop_normal.png"
 roughness = "assets/pf_testprop_roughness.png"
 metallic = "assets/pf_testprop_metallic.png"
+
+
+# Der harte Fall: Sockel, duenne Streben, Gelaender, Kleinteil.
+# Hier entscheidet sich, ob die LOD-Kette taugt - eine Kugel ist zu gutmuetig.
+[[prop]]
+name = "pf_rig"
+mesh = "assets/pf_rig.obj"
+max_tris = 1700
+
+[prop.textures]
+diffuse = "assets/pf_rig_albedo.png"
+normal = "assets/pf_rig_normal.png"
+roughness = "assets/pf_rig_roughness.png"
+metallic = "assets/pf_rig_metallic.png"
