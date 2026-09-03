@@ -140,6 +140,23 @@ def report(path: Path) -> list[str]:
         lines.append("  Bounds:")
         lines.extend("  " + l for l in describe(bounds, depth=1, max_depth=2))
 
+        # Kinder und Flags gezielt statt per Tiefendump: die Flags liegen an
+        # den Kind-Bounds, und ein vollstaendiger Baum bis dorthin sprengt die
+        # Annotation. Beides zusammen entscheidet, ob die Kollision wirkt:
+        # ohne Kinder ist das Composite eine leere Huelle, ohne Flags
+        # kollidiert der Bound mit nichts.
+        children = first(bounds, "Children")
+        items = list(children) if children is not None else []
+        lines.append(f"  Kind-Bounds: {len(items)}"
+                     + (f" ({', '.join(i.attrib.get('type', '?') for i in items)})" if items else ""))
+        for item in items:
+            flags = [c for c in item.iter() if c.tag.lower().startswith("compositeflags")]
+            for flag in flags:
+                value = (flag.text or "").strip() or flag.attrib.get("value", "")
+                lines.append(f"    {flag.tag}: {value or '(leer)'}")
+            if not flags:
+                lines.append("    (keine CompositeFlags gefunden)")
+
     # Aufbau der ersten Geometrie der hoechsten Stufe. Dort steht, welche
     # Vertex-Semantiken die Datei traegt und wie viele Werte drinstehen.
     for tag, container in lod_containers(root):

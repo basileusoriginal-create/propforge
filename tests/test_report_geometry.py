@@ -31,8 +31,23 @@ GEOMETRY = """
       </Item>"""
 
 
+BOUNDS = """
+  <Bounds type="Composite">
+    <BoxMin x="-1" y="-1" z="0" />
+    <Children>
+      <Item type="GeometryBVH">
+        <CompositeFlags1>MAP_WEAPON MAP_DYNAMIC</CompositeFlags1>
+        <CompositeFlags2>PED OBJECT</CompositeFlags2>
+      </Item>
+    </Children>
+  </Bounds>"""
+
+EMPTY_BOUNDS = """
+  <Bounds type="Composite"><BoxMin x="-1" y="-1" z="0" /></Bounds>"""
+
+
 def make_ydr(tmp_path, name="pf_crate", sampler_target="pf_crate_d", embedded="pf_crate_d",
-             geometry=GEOMETRY):
+             geometry=GEOMETRY, bounds=BOUNDS):
     tex = (f"<Item><Name>{embedded}</Name><Format>D3DFMT_DXT1</Format>"
            '<Width value="512" /><Height value="512" /></Item>') if embedded else ""
     xml = f"""<?xml version="1.0" encoding="UTF-8"?>
@@ -49,7 +64,7 @@ def make_ydr(tmp_path, name="pf_crate", sampler_target="pf_crate_d", embedded="p
       </Item>
     </Shaders>
   </ShaderGroup>
-  <DrawableModelsHigh><Item><Geometries>{geometry}</Geometries></Item></DrawableModelsHigh>
+  <DrawableModelsHigh><Item><Geometries>{geometry}</Geometries></Item></DrawableModelsHigh>{bounds}
 </Drawable>"""
     path = tmp_path / f"{name}.ydr.xml"
     path.write_text(xml, encoding="utf-8")
@@ -62,7 +77,28 @@ def body(tmp_path, **kwargs):
 
 class TestReport:
     def test_lists_top_level_blocks(self, tmp_path):
-        assert "Bloecke: Name, ShaderGroup, DrawableModelsHigh" in body(tmp_path)
+        assert "Bloecke: Name, ShaderGroup, DrawableModelsHigh, Bounds" in body(tmp_path)
+
+    def test_counts_child_bounds(self, tmp_path):
+        assert "Kind-Bounds: 1 (GeometryBVH)" in body(tmp_path)
+
+    def test_empty_composite_is_visible(self, tmp_path):
+        # Das war der unsichtbare Fehler: Composite da, Kinder keine, und
+        # man laeuft durch den Prop.
+        assert "Kind-Bounds: 0" in body(tmp_path, bounds=EMPTY_BOUNDS)
+
+    def test_shows_collision_flags(self, tmp_path):
+        out = body(tmp_path)
+        assert "CompositeFlags1: MAP_WEAPON MAP_DYNAMIC" in out
+        assert "CompositeFlags2: PED OBJECT" in out
+
+    def test_reports_missing_flags(self, tmp_path):
+        without = BOUNDS.replace("<CompositeFlags1>MAP_WEAPON MAP_DYNAMIC</CompositeFlags1>", "")
+        without = without.replace("<CompositeFlags2>PED OBJECT</CompositeFlags2>", "")
+        assert "(keine CompositeFlags gefunden)" in body(tmp_path, bounds=without)
+
+    def test_no_bounds_reported(self, tmp_path):
+        assert "Bounds: (keine)" in body(tmp_path, bounds="")
 
     def test_names_embedded_textures(self, tmp_path):
         assert "eingebettete Texturen: pf_crate_d" in body(tmp_path)
