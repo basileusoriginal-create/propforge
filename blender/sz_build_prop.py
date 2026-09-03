@@ -138,20 +138,46 @@ def import_mesh(path: Path, source_up: str = "y") -> bpy.types.Object:
 
     before = set(bpy.data.objects)
     IMPORTERS[suffix](str(path), source_up)
-    new_meshes = [o for o in set(bpy.data.objects) - before if o.type == "MESH"]
+    created = set(bpy.data.objects) - before
+    new_meshes = [o for o in created if o.type == "MESH"]
     if not new_meshes:
         raise SystemExit(f"Keine Mesh-Objekte in {path} gefunden.")
 
-    if len(new_meshes) > 1:
-        bpy.ops.object.select_all(action="DESELECT")
-        for o in new_meshes:
-            o.select_set(True)
-        bpy.context.view_layer.objects.active = new_meshes[0]
-        bpy.ops.object.join()
+    # Nicht auf context.active_object verlassen. Der glTF-Importer legt die
+    # Knotenhierarchie als Empties an und laesst haeufig eines davon aktiv --
+    # ein Empty kennt keinen Edit-Modus, und das Aufraeumen scheiterte dann mit
+    # 'enum "EDIT" not found in ("OBJECT")'.
+    target = sorted(new_meshes, key=lambda o: len(o.data.vertices), reverse=True)[0]
 
-    obj = bpy.context.view_layer.objects.active
-    obj.name = path.stem
-    return obj
+    if len(new_meshes) > 1:
+        for other in tuple(bpy.context.selected_objects):
+            if other is not None:
+                other.select_set(False)
+        for mesh_obj in new_meshes:
+            mesh_obj.select_set(True)
+        bpy.context.view_layer.objects.active = target
+        bpy.ops.object.join()
+        log(f"{len(new_meshes)} Mesh-Objekte zusammengefuehrt.")
+
+    # Die Elternkette mitsamt ihrer Transformation aufloesen. glTF haengt das
+    # Mesh unter Empties, die die Y-up-nach-Z-up-Drehung tragen. Ein spaeteres
+    # transform_apply wirkt nur auf das Objekt selbst, nicht auf die Eltern --
+    # der Prop kaeme gedreht in den Export.
+    if target.parent is not None:
+        world = target.matrix_world.copy()
+        target.parent = None
+        target.matrix_world = world
+        log("Elternobjekt geloest, Welttransformation uebernommen.")
+
+    # Uebrig gebliebene Empties entfernen, damit sie nicht in der
+    # Sollumz-Hierarchie landen.
+    for leftover in created:
+        if leftover is not target and leftover.name in bpy.data.objects:
+            bpy.data.objects.remove(leftover, do_unlink=True)
+
+    target.name = path.stem
+    bpy.context.view_layer.objects.active = target
+    return target
 
 
 def cleanup_mesh(obj: bpy.types.Object) -> None:

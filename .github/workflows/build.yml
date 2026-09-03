@@ -30,7 +30,17 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install -r requirements.txt
-      - run: pytest tests/ -v
+
+      - name: Tests
+        run: |
+          set -o pipefail
+          pytest tests/ -v 2>&1 | tee pytest.log
+
+      # Wie bei der Pipeline: Schritt-Logs sind nur eingeloggt lesbar,
+      # Annotations nicht. Ohne das ist ein Testfehlschlag von aussen stumm.
+      - name: Fehler als Annotation ausgeben
+        if: failure()
+        run: python ci/report_failure.py pytest.log "Unit-Tests"
 
   pipeline:
     name: Pipeline (Linux, CWXML)

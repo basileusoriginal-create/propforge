@@ -108,8 +108,13 @@ def _resolve_args(func, fixtures: dict, tmp_root: Path, cache: dict):
         if param == "self":
             continue
         if param == "tmp_path":
-            d = Path(tempfile.mkdtemp(dir=tmp_root))
-            kwargs["tmp_path"] = d
+            # Wie bei echtem pytest: ein Testfall bekommt GENAU EIN tmp_path,
+            # auch wenn eine Fixture es ebenfalls anfordert. Vorher erzeugte
+            # jede Anforderung ein eigenes Verzeichnis - dadurch lagen Dateien
+            # woanders als im echten Lauf, und Unterschiede blieben verborgen.
+            if "tmp_path" not in cache:
+                cache["tmp_path"] = Path(tempfile.mkdtemp(dir=tmp_root))
+            kwargs["tmp_path"] = cache["tmp_path"]
         elif param in fixtures:
             if param not in cache:
                 fx = fixtures[param]

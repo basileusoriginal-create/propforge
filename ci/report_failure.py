@@ -27,6 +27,7 @@ NOISE = (
     "found bundled python",
     "Read prefs:",
     "Warning: This script was written for",
+    "PASSED",  # bei pytest -v ist jede bestandene Zeile Rauschen
 )
 
 
