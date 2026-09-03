@@ -34,6 +34,11 @@ ELEVATION = math.radians(22.0)
 # Konvention, bei der Formen am besten lesbar sind.
 LIGHT = np.array([-0.4, 0.5, 0.75])
 
+# Hoechster Lambert-Wert, den eine sichtbare Flaeche erreichen kann: die
+# Kamera blickt entlang +Z im Kameraraum, das Licht faellt seitlich ein.
+# Auf diesen Wert wird normiert, damit der volle Farbbereich genutzt wird.
+LIGHT_MAX = float(LIGHT[2] / np.linalg.norm(LIGHT))
+
 SOLID_BASE = np.array([92, 92, 104], dtype=float)
 SOLID_LIT = np.array([214, 214, 224], dtype=float)
 WIRE_COLOR = (198, 198, 210)
@@ -114,54 +119,102 @@ def compute_bounds(geometry: Geometry) -> tuple[np.ndarray, float]:
 
 
 def _shade(normals: np.ndarray) -> np.ndarray:
-    """Lambert-Schattierung, aufgehellt, damit auch abgewandte Flaechen lesbar bleiben."""
+    """Lambert-Schattierung, auf den sichtbaren Bereich normiert.
+
+    Ohne Normierung bleibt das Bild flau: eine zur Kamera zeigende Flaeche
+    erreicht nur `LIGHT_MAX` statt 1.0, weil das Licht seitlich einfaellt. Der
+    nutzbare Kontrast waere damit ein knappes Viertel des Farbbereichs - zu
+    wenig, um Flaechen auseinanderzuhalten.
+
+    Die Grundhelligkeit bleibt: reines Lambert laesst abgewandte Flaechen im
+    Schwarz verschwinden, und dort sitzt die Silhouette, um die es geht.
+    """
     light = LIGHT / np.linalg.norm(LIGHT)
-    intensity = np.clip(normals @ light, 0.0, 1.0)
-    # 0.25 Grundhelligkeit: reines Lambert laesst Randflaechen im Schwarz
-    # verschwinden, und dort sitzt die Silhouette, um die es geht.
-    intensity = 0.25 + 0.75 * intensity
-    return intensity
+    intensity = np.clip(normals @ light, 0.0, 1.0) / LIGHT_MAX
+    return 0.18 + 0.82 * np.clip(intensity, 0.0, 1.0)
 
 
 def render_solid(geometry: Geometry, size: int, bounds: tuple[np.ndarray, float]) -> Image.Image:
-    """Zeichnet die gefuellte Form mit Maleralgorithmus."""
-    image = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    """Zeichnet die gefuellte Form mit echtem Tiefenpuffer.
+
+    Der erste Ansatz war ein Maleralgorithmus - Dreiecke nach mittlerer Tiefe
+    sortieren und von hinten nach vorne malen. Der taugt hier aus zwei Gruenden
+    nicht:
+
+    1. Bei ineinandergreifender Geometrie versagt die Sortierung. Eine grosse
+       Platte kann "im Mittel" weit weg sein und trotzdem vor einer Strebe
+       liegen. Das Ergebnis sah aus wie ein zerlegtes Objekt.
+    2. Die Sortierrichtung war zudem vertauscht. Bei einer Kugel faellt das
+       nicht auf, weil ihre Rueckseite genauso aussieht wie ihre Vorderseite -
+       ein Fehler, der sich erst an einem Objekt mit Struktur zeigt.
+
+    Pro Pixel zu entscheiden ist ein paar Zeilen mehr und dafuer richtig.
+    """
     if geometry.triangle_count == 0:
-        return image
+        return Image.new("RGBA", (size, size), (0, 0, 0, 0))
 
     screen, depth = project(geometry, size, bounds)
-    draw = ImageDraw.Draw(image)
 
     tri = geometry.triangles
-    v0 = geometry.vertices[tri[:, 0]]
-    v1 = geometry.vertices[tri[:, 1]]
-    v2 = geometry.vertices[tri[:, 2]]
+    v0, v1, v2 = (geometry.vertices[tri[:, i]] for i in range(3))
 
     normals = np.cross(v1 - v0, v2 - v0)
     lengths = np.linalg.norm(normals, axis=1, keepdims=True)
     lengths[lengths == 0] = 1.0
-    normals = normals / lengths
-    normals_cam = normals @ view_matrix().T
-
+    normals_cam = (normals / lengths) @ view_matrix().T
     intensity = _shade(normals_cam)
 
-    # Maleralgorithmus: hinten zuerst. Ein Z-Buffer pro Pixel waere genauer,
-    # aber fuer eine Silhouettenpruefung ist der Aufwand nicht gerechtfertigt.
-    tri_depth = depth[tri].mean(axis=1)
-    order = np.argsort(tri_depth)[::-1]
+    # Groesseres z bedeutet naeher an der Kamera (nachgemessen, nicht geraten).
+    zbuffer = np.full((size, size), -np.inf, dtype=float)
+    canvas = np.zeros((size, size, 3), dtype=float)
+    covered = np.zeros((size, size), dtype=bool)
 
-    for index in order:
+    for index in range(len(tri)):
         a, b, c = tri[index]
-        shade = intensity[index]
-        color = SOLID_BASE + (SOLID_LIT - SOLID_BASE) * shade
-        fill = tuple(int(v) for v in color) + (255,)
-        draw.polygon(
-            [tuple(screen[a]), tuple(screen[b]), tuple(screen[c])],
-            fill=fill,
-            outline=EDGE_COLOR,
-        )
+        pa, pb, pc = screen[a], screen[b], screen[c]
 
-    return image
+        min_x = max(int(np.floor(min(pa[0], pb[0], pc[0]))), 0)
+        max_x = min(int(np.ceil(max(pa[0], pb[0], pc[0]))), size - 1)
+        min_y = max(int(np.floor(min(pa[1], pb[1], pc[1]))), 0)
+        max_y = min(int(np.ceil(max(pa[1], pb[1], pc[1]))), size - 1)
+        if min_x > max_x or min_y > max_y:
+            continue
+
+        area = (pb[0] - pa[0]) * (pc[1] - pa[1]) - (pc[0] - pa[0]) * (pb[1] - pa[1])
+        if abs(area) < 1e-9:
+            continue  # entartetes Dreieck
+
+        ys, xs = np.mgrid[min_y:max_y + 1, min_x:max_x + 1]
+        px = xs + 0.5
+        py = ys + 0.5
+
+        # Baryzentrische Koordinaten ueber Kantenfunktionen.
+        w0 = ((pb[0] - pa[0]) * (py - pa[1]) - (px - pa[0]) * (pb[1] - pa[1])) / area
+        w1 = ((px - pa[0]) * (pc[1] - pa[1]) - (pc[0] - pa[0]) * (py - pa[1])) / area
+        w2 = 1.0 - w0 - w1
+
+        inside = (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
+        if not inside.any():
+            continue
+
+        z = w2 * depth[a] + w1 * depth[b] + w0 * depth[c]
+
+        window = zbuffer[min_y:max_y + 1, min_x:max_x + 1]
+        nearer = inside & (z > window)
+        if not nearer.any():
+            continue
+
+        window[nearer] = z[nearer]
+        shade = intensity[index]
+        canvas[min_y:max_y + 1, min_x:max_x + 1][nearer] = (
+            SOLID_BASE + (SOLID_LIT - SOLID_BASE) * shade
+        )
+        covered[min_y:max_y + 1, min_x:max_x + 1][nearer] = True
+
+    rgba = np.zeros((size, size, 4), dtype=np.uint8)
+    rgba[:, :, :3] = np.clip(canvas, 0, 255).astype(np.uint8)
+    rgba[:, :, 3] = np.where(covered, 255, 0)
+    return Image.fromarray(rgba, mode="RGBA")
 
 
 def signed_area(screen: np.ndarray, triangles: np.ndarray) -> np.ndarray:

@@ -133,12 +133,14 @@ class TestSolidRendering:
 
     def test_shading_varies_across_surface(self):
         # Eine Kugel muss unterschiedlich helle Flaechen haben, sonst ist die
-        # Form im Bild nicht lesbar.
+        # Form im Bild nicht lesbar. Gemessen: Bereich 113..195, std ~11.
         geo = sphere(24, 16)
         img = raster.render_solid(geo, 192, raster.compute_bounds(geo))
         arr = np.asarray(img)
         visible = arr[arr[:, :, 3] > 0][:, 0]
         assert visible.std() > 8
+        # Der Hellbereich muss breit genug sein, um Flaechen zu unterscheiden.
+        assert int(visible.max()) - int(visible.min()) > 60
 
     def test_smaller_lod_covers_less_area(self):
         # Der eigentliche Zweck: der Silhouettenverlust muss messbar sein.
@@ -184,3 +186,68 @@ class TestSignedArea:
         backward = raster.signed_area(screen, np.array([[0, 2, 1]]))
         assert forward[0] == -backward[0]
         assert abs(forward[0]) == pytest.approx(50.0)
+
+
+class TestDepthBuffer:
+    """Der Tiefenpuffer ersetzt einen Maleralgorithmus, der zweimal falsch war:
+    vertauschte Sortierrichtung und ungeeignet fuer ineinandergreifende Formen.
+    Beides blieb an einer Kugel unsichtbar - diese Tests nutzen deshalb Formen,
+    bei denen Verdeckung eindeutig ist."""
+
+    def _two_quads(self, near_first: bool):
+        """Zwei parallele Vierecke, eines klar vor dem anderen."""
+        import numpy as np
+
+        direction = raster.view_matrix().T @ np.array([0.0, 0.0, 1.0])
+        near = direction * 2.0
+        far = -direction * 2.0
+
+        verts = []
+        for offset in ((near, far) if near_first else (far, near)):
+            for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+                point = offset + np.array([dx, dy, 0.0]) * 0.9
+                verts.append(point)
+        tris = np.array([[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]])
+        return raster.Geometry(np.array(verts), tris)
+
+    def test_nearer_surface_wins_regardless_of_order(self):
+        # Egal in welcher Reihenfolge die Dreiecke in der Liste stehen: das
+        # Bild muss identisch sein. Beim Maleralgorithmus war es das nicht.
+        import numpy as np
+
+        a = self._two_quads(near_first=True)
+        b = self._two_quads(near_first=False)
+        bounds = raster.compute_bounds(a)
+        img_a = np.asarray(raster.render_solid(a, 96, bounds))
+        img_b = np.asarray(raster.render_solid(b, 96, bounds))
+        assert np.array_equal(img_a, img_b)
+
+    def test_hidden_surface_does_not_show(self):
+        # Ein kleines Objekt vollstaendig hinter einer grossen Flaeche darf
+        # im Bild nicht auftauchen.
+        import numpy as np
+
+        direction = raster.view_matrix().T @ np.array([0.0, 0.0, 1.0])
+        verts = []
+        for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            verts.append(direction * 2.0 + np.array([dx, dy, 0.0]) * 1.0)
+        for dx, dy in ((-1, -1), (1, -1), (1, 1), (-1, 1)):
+            verts.append(-direction * 2.0 + np.array([dx, dy, 0.0]) * 0.2)
+        tris = np.array([[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7]])
+        geo = raster.Geometry(np.array(verts), tris)
+
+        only_front = raster.Geometry(np.array(verts[:4]), np.array([[0, 1, 2], [0, 2, 3]]))
+        bounds = raster.compute_bounds(geo)
+
+        with_hidden = np.asarray(raster.render_solid(geo, 96, bounds))
+        without = np.asarray(raster.render_solid(only_front, 96, bounds))
+        assert np.array_equal(with_hidden, without)
+
+    def test_output_is_deterministic(self):
+        import numpy as np
+
+        geo = sphere(16, 10)
+        bounds = raster.compute_bounds(geo)
+        first = np.asarray(raster.render_solid(geo, 64, bounds))
+        second = np.asarray(raster.render_solid(geo, 64, bounds))
+        assert np.array_equal(first, second)
