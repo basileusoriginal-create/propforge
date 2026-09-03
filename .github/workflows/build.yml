@@ -149,6 +149,17 @@ jobs:
             ci-build.log
           if-no-files-found: warn
 
+      # Eigenes Artefakt nur fuer die Kontaktboegen: das ist das, was man sich
+      # nach einem Lauf tatsaechlich ansieht, und es soll nicht zwischen
+      # Exportdateien vergraben sein.
+      - name: LOD-Vorschau hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: propforge-lod-preview
+          path: ci/out/previews/**
+          if-no-files-found: warn
+
   pipeline-windows:
     name: Pipeline (Windows, NATIVE)
     runs-on: windows-latest

@@ -481,9 +481,133 @@ def ensure_lod_materials(
         mesh.materials.append(material)
 
 
+# --- Vorschaubilder ----------------------------------------------------------
+
+def _frame_camera(camera: bpy.types.Object, center, radius: float, fov: float) -> None:
+    """Setzt die Kamera so, dass das Objekt formatfuellend im Bild liegt.
+
+    Blickrichtung ist eine feste Dreiviertelansicht - dieselbe Perspektive fuer
+    alle LOD-Stufen, sonst sind die Bilder nicht vergleichbar.
+    """
+    import math
+
+    from mathutils import Vector
+
+    direction = Vector((0.72, -0.62, 0.31)).normalized()
+    distance = (radius / math.sin(fov / 2.0)) * 1.15
+
+    camera.location = center + direction * distance
+    # to_track_quat ist der uebliche Weg, eine Kamera ohne Constraint
+    # auszurichten: -Z ist ihre Blickachse, Y ihre Oben-Achse.
+    camera.rotation_euler = (-direction).to_track_quat("-Z", "Y").to_euler()
+
+
+def _bounds(mesh: bpy.types.Mesh):
+    """Mittelpunkt und Radius der Bounding-Sphere eines Meshes."""
+    from mathutils import Vector
+
+    if not mesh.vertices:
+        return Vector((0.0, 0.0, 0.0)), 1.0
+
+    coords = [v.co for v in mesh.vertices]
+    lo = Vector((min(c.x for c in coords), min(c.y for c in coords), min(c.z for c in coords)))
+    hi = Vector((max(c.x for c in coords), max(c.y for c in coords), max(c.z for c in coords)))
+    center = (lo + hi) / 2.0
+    radius = max((c - center).length for c in coords) or 1.0
+    return center, radius
+
+
+def render_lods(
+    name: str,
+    lod_meshes: dict[str, bpy.types.Mesh],
+    out_dir: Path,
+    resolution: int = 512,
+) -> list[dict]:
+    """Rendert jede LOD-Stufe einmal massiv und einmal als Drahtgitter.
+
+    Zweck: die Frage, die kein Test beantwortet - haelt die reduzierte Stufe
+    noch die Silhouette? Decimate ist blind fuer duenne Strukturen, und im
+    Spiel faellt das erst auf, wenn der Prop in der Distanz zerfaellt.
+
+    Gerendert wird mit Workbench: kein GPU noetig, keine Lichtsetzung, und das
+    Ergebnis ist deterministisch. Fuer eine Silhouettenpruefung ist das genau
+    richtig - es geht nicht um Schoenheit.
+    """
+    import math
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    scene = bpy.context.scene
+
+    scene.render.engine = "BLENDER_WORKBENCH"
+    scene.render.resolution_x = resolution
+    scene.render.resolution_y = resolution
+    scene.render.resolution_percentage = 100
+    scene.render.film_transparent = True
+    scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
+
+    shading = scene.display.shading
+    shading.light = "STUDIO"
+    shading.color_type = "SINGLE"
+    shading.single_color = (0.68, 0.68, 0.72)
+    shading.show_object_outline = True
+    shading.show_cavity = True
+
+    cam_data = bpy.data.cameras.new(f"{name}_preview_cam")
+    cam_data.lens_unit = "FOV"
+    cam_data.angle = math.radians(40.0)
+    camera = bpy.data.objects.new(f"{name}_preview_cam", cam_data)
+    bpy.context.collection.objects.link(camera)
+    scene.camera = camera
+
+    # Alle Stufen aus derselben Entfernung zeigen: die Kamera wird einmal auf
+    # die hoechste Stufe eingerichtet und danach nicht mehr bewegt. Sonst
+    # kaschiert ein Zoom genau den Silhouettenverlust, den man sehen will.
+    reference = lod_meshes.get("high") or next(iter(lod_meshes.values()))
+    center, radius = _bounds(reference)
+    _frame_camera(camera, center, radius, cam_data.angle)
+
+    stats: list[dict] = []
+
+    for lod_key, mesh in lod_meshes.items():
+        preview_obj = bpy.data.objects.new(f"{name}_preview_{lod_key}", mesh)
+        bpy.context.collection.objects.link(preview_obj)
+
+        # Nur dieses eine Objekt ist sichtbar - Drawable, Kollision und die
+        # anderen Stufen wuerden das Bild sonst zumuellen.
+        hidden = []
+        for other in bpy.context.view_layer.objects:
+            if other not in (preview_obj, camera) and not other.hide_render:
+                other.hide_render = True
+                hidden.append(other)
+
+        mesh.calc_loop_triangles()
+        entry = {"lod": lod_key, "triangles": len(mesh.loop_triangles), "images": {}}
+
+        for mode, shading_type in (("solid", "SOLID"), ("wire", "WIREFRAME")):
+            shading.type = shading_type
+            target = out_dir / f"{name}_{lod_key}_{mode}.png"
+            scene.render.filepath = str(target)
+            bpy.ops.render.render(write_still=True)
+            if target.is_file():
+                entry["images"][mode] = target.name
+            else:
+                log(f"  Vorschau {lod_key}/{mode} wurde nicht geschrieben.")
+
+        stats.append(entry)
+        log(f"  Vorschau {lod_key}: {entry['triangles']} Dreiecke")
+
+        for other in hidden:
+            other.hide_render = False
+        bpy.data.objects.remove(preview_obj, do_unlink=True)
+
+    bpy.data.objects.remove(camera, do_unlink=True)
+    return stats
+
+
 # --- Ablauf -----------------------------------------------------------------
 
-def build(job: dict, fmt: str, version: str) -> None:
+def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> dict:
     name = job["name"]
     log(f"=== {name} ===")
 
@@ -528,6 +652,12 @@ def build(job: dict, fmt: str, version: str) -> None:
     export(drawable, out_dir, fmt, version)
     log(f"Export nach {out_dir}")
 
+    previews: list[dict] = []
+    if render_dir is not None:
+        previews = render_lods(name, lod_meshes, Path(render_dir) / name)
+
+    return {"name": name, "previews": previews}
+
 
 def main(argv: list[str]) -> int:
     if "--" in argv:
@@ -540,6 +670,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--format", default="NATIVE", choices=["NATIVE", "CWXML"])
     parser.add_argument("--version", default="GEN8", choices=["GEN8", "GEN9"])
     parser.add_argument("--result", help="Pfad fuer den Ergebnisbericht (JSON)")
+    parser.add_argument("--render", help="Verzeichnis fuer LOD-Vorschaubilder (optional)")
     args = parser.parse_args(argv)
 
     payload = json.loads(Path(args.job).read_text(encoding="utf-8"))
@@ -547,12 +678,14 @@ def main(argv: list[str]) -> int:
 
     succeeded: list[str] = []
     failures: list[dict] = []
+    previews: list[dict] = []
 
     for job in jobs:
         name = job.get("name", "?")
         try:
-            build(job, args.format, args.version)
+            info = build(job, args.format, args.version, args.render)
             succeeded.append(name)
+            previews.append(info)
         except Exception as exc:  # noqa: BLE001 - ein kaputter Prop darf den Batch nicht stoppen
             import traceback
 
@@ -576,7 +709,12 @@ def main(argv: list[str]) -> int:
         result_path.parent.mkdir(parents=True, exist_ok=True)
         result_path.write_text(
             json.dumps(
-                {"total": len(jobs), "succeeded": succeeded, "failed": failures},
+                {
+                    "total": len(jobs),
+                    "succeeded": succeeded,
+                    "failed": failures,
+                    "props": previews,
+                },
                 indent=2,
                 ensure_ascii=False,
             ),

@@ -4,6 +4,7 @@
     propforge textures  pipeline.toml     PBR -> DDS
     propforge jobs      pipeline.toml     Job-JSON fuer die Blender-Stufe
     propforge build     pipeline.toml     Blender headless aufrufen
+    propforge verify    pipeline.toml     Export gegen die Konfiguration pruefen
     propforge pack      pipeline.toml     FiveM-Resource bauen
     propforge run       pipeline.toml     alles nacheinander
 """
@@ -19,7 +20,7 @@ from pathlib import Path
 
 from . import doctor as pf_doctor
 from . import inspect as pf_inspect
-from . import packaging, textures, validate
+from . import packaging, preview as pf_preview, textures, validate
 from . import verify as pf_verify
 from .config import PipelineConfig
 from .validate import Level
@@ -123,6 +124,7 @@ def cmd_build(args: argparse.Namespace) -> int:
         "--format", config.export_format,
         "--version", config.export_version,
         "--result", str(result_file),
+        "--render", str(config.workdir / "renders"),
     ]
     print("$ " + " ".join(cmd))
     returncode = subprocess.run(cmd).returncode
@@ -147,6 +149,16 @@ def cmd_build(args: argparse.Namespace) -> int:
     print(f"\nGebaut: {len(succeeded)}/{result.get('total', 0)}")
     for failure in failed:
         print(f"  FEHLGESCHLAGEN {failure['name']}: {failure['error']}", file=sys.stderr)
+
+    if not failed:
+        try:
+            sheets = pf_preview.build_all(
+                config.workdir / "renders", result, config.workdir / "previews"
+            )
+            for sheet in sheets:
+                print(f"  Vorschau: {sheet}")
+        except Exception as exc:  # noqa: BLE001 - eine fehlende Vorschau darf den Build nicht kippen
+            print(f"  Vorschau konnte nicht erzeugt werden: {exc}", file=sys.stderr)
 
     return 1 if failed else returncode
 
