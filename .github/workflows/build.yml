@@ -157,6 +157,13 @@ jobs:
         if: always()
         run: python ci/report_build.py ci/out/build_result.json "Build (Linux)"
 
+      # Der Aufbau der Geometrie selbst. Bis hierher war von aussen zu sehen,
+      # DASS etwas gebaut wurde und wie gross es ist - nicht, was drinsteht.
+      # Genau dort liegt der Fehler, wenn eine gueltige Datei nichts anzeigt.
+      - name: Aufbau der Drawables als Annotation ausgeben
+        if: always()
+        run: python ci/report_geometry.py ci/out/build "Aufbau"
+
       - name: Fehler als Annotation ausgeben
         if: failure()
         run: python ci/report_failure.py ci-build.log "Pipeline (Linux, CWXML)"

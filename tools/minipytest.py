@@ -1,7 +1,7 @@
 """Minimaler pytest-Ersatz fuer Umgebungen ohne PyPI-Zugriff.
 
 Deckt genau die Features ab, die die PropForge-Suite nutzt: fixtures (inkl.
-tmp_path), parametrize, raises, approx. Auf einer normalen Entwicklungsmaschine
+tmp_path und capsys), parametrize, raises, approx. Auf einer normalen Entwicklungsmaschine
 sollte stattdessen echtes pytest laufen - dieses Modul existiert nur, damit die
 Suite auch in einer abgeschotteten Umgebung ausfuehrbar bleibt.
 """
@@ -33,6 +33,40 @@ class _ApproxScalar:
 
     def __repr__(self):
         return f"approx({self.expected})"
+
+
+class _CaptureResult:
+    def __init__(self, out: str, err: str):
+        self.out = out
+        self.err = err
+
+
+class _CapSys:
+    """Ersatz fuer pytests capsys: faengt stdout und stderr des Testfalls ab.
+
+    Braucht die Suite fuer die CI-Skripte - die schreiben ihr Ergebnis auf
+    stdout, und ob eine Annotation korrekt kodiert ist, laesst sich nur an
+    dieser Ausgabe pruefen.
+    """
+
+    def __init__(self):
+        import io
+
+        self._out = io.StringIO()
+        self._err = io.StringIO()
+        self._saved = (sys.stdout, sys.stderr)
+        sys.stdout, sys.stderr = self._out, self._err
+
+    def readouterr(self) -> "_CaptureResult":
+        result = _CaptureResult(self._out.getvalue(), self._err.getvalue())
+        self._out.seek(0)
+        self._out.truncate(0)
+        self._err.seek(0)
+        self._err.truncate(0)
+        return result
+
+    def close(self) -> None:
+        sys.stdout, sys.stderr = self._saved
 
 
 class _Raises:
@@ -107,7 +141,11 @@ def _resolve_args(func, fixtures: dict, tmp_root: Path, cache: dict):
     for param in inspect.signature(func).parameters:
         if param == "self":
             continue
-        if param == "tmp_path":
+        if param == "capsys":
+            if "capsys" not in cache:
+                cache["capsys"] = _CapSys()
+            kwargs["capsys"] = cache["capsys"]
+        elif param == "tmp_path":
             # Wie bei echtem pytest: ein Testfall bekommt GENAU EIN tmp_path,
             # auch wenn eine Fixture es ebenfalls anfordert. Vorher erzeugte
             # jede Anforderung ein eigenes Verzeichnis - dadurch lagen Dateien
@@ -133,6 +171,12 @@ def _run_case(label, func, instance, fixtures, tmp_root, result: Result, params=
         result.passed += 1
     except Exception:  # noqa: BLE001
         result.failures.append((label, traceback.format_exc()))
+    finally:
+        # Umleitung IMMER zuruecknehmen, auch wenn der Fall gescheitert ist -
+        # sonst verschwindet der Rest des Laufs in einem StringIO.
+        capture = cache.get("capsys")
+        if capture is not None:
+            capture.close()
 
 
 def run_module(module, result: Result, tmp_root: Path) -> None:
