@@ -580,6 +580,18 @@ def apply_convex_hull(bound_objs: list[bpy.types.Object]) -> None:
         bpy.ops.object.mode_set(mode="OBJECT")
 
 
+def active_flags(group) -> list[str]:
+    """Namen der gesetzten Flags einer BoundFlags-Gruppe.
+
+    ``BoundFlags`` ist eine schlichte PropertyGroup aus BoolProperties und hat
+    - anders als die Archetyp-Flags - KEIN ``total``-Feld. Sollumz zaehlt
+    dafuer selbst die Annotationen durch (``ybn/gta5/presets/flag.py``), und
+    genau das passiert hier auch.
+    """
+    names = list(type(group).__annotations__.keys())
+    return [name for name in names if getattr(group, name, False)]
+
+
 def apply_collision_flags(drawable: bpy.types.Object, preset_name: str) -> None:
     """Setzt die Kollisionsflags und prueft, dass sie auch angekommen sind.
 
@@ -612,20 +624,23 @@ def apply_collision_flags(drawable: bpy.types.Object, preset_name: str) -> None:
         if not apply_flag_preset(bound, preset_name):
             raise RuntimeError(
                 f"Das Kollisions-Preset '{preset_name}' gibt es nicht. "
-                f"Verfuegbar: {known}. Ohne Preset haette die Kollision Flags 0 "
-                "und wuerde mit nichts kollidieren - man liefe durch den Prop "
-                "hindurch, ohne dass eine Datei fehlt."
+                f"Verfuegbar: {known}. Ohne Preset haette die Kollision keine "
+                "gesetzten Flags und wuerde mit nichts kollidieren - man liefe "
+                "durch den Prop hindurch, ohne dass eine Datei fehlt."
             )
 
-        flags1 = int(bound.composite_flags1.total or 0)
-        flags2 = int(bound.composite_flags2.total or 0)
-        if flags1 == 0 and flags2 == 0:
+        set1 = active_flags(bound.composite_flags1)
+        set2 = active_flags(bound.composite_flags2)
+        if not set1 and not set2:
             raise RuntimeError(
-                f"Preset '{preset_name}' wurde angewandt, '{bound.name}' hat aber "
-                "trotzdem Flags 0. Damit kollidiert der Bound mit nichts."
+                f"Preset '{preset_name}' wurde angewandt, an '{bound.name}' ist "
+                "aber kein einziges Flag gesetzt. Damit kollidiert der Bound "
+                "mit nichts."
             )
         log(f"  Kollisionsflags '{preset_name}' auf '{bound.name}': "
-            f"{flags1} / {flags2}")
+            f"{len(set1)}+{len(set2)} gesetzt "
+            f"({', '.join(set1[:4])}{' ...' if len(set1) > 4 else ''} | "
+            f"{', '.join(set2[:4])}{' ...' if len(set2) > 4 else ''})")
 
 
 def apply_lod_distances(drawable: bpy.types.Object, distances: dict) -> None:
