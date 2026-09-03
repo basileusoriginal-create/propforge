@@ -9,6 +9,7 @@
     propforge run       pipeline.toml     alles nacheinander
     propforge ingest    modell.glb        GLB einlesen, Konfiguration erzeugen
     propforge materials [begriff]         Kollisionsmaterialien nachschlagen
+    propforge generate  "ein Holztisch"   Mesh erzeugen lassen und einlesen
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from pathlib import Path
 
 from . import collision_materials as pf_materials
 from . import doctor as pf_doctor
+from . import generate as pf_generate
 from . import ingest as pf_ingest
 from . import inspect as pf_inspect
 from . import packaging, preview as pf_preview, textures, validate
@@ -283,6 +285,61 @@ def cmd_materials(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_generate(args: argparse.Namespace) -> int:
+    """Laesst ein Mesh erzeugen und reicht es direkt an ingest weiter."""
+    import os
+
+    name = args.name or "pf_" + "_".join(args.prompt.lower().split()[:3])
+    name = "".join(c for c in name if c.isalnum() or c == "_")
+
+    request = pf_generate.GenerationRequest(
+        prompt=args.prompt,
+        name=name,
+        face_limit=args.face_limit,
+        pbr=not args.no_pbr,
+        model_version=args.model,
+    )
+
+    if args.dry_run:
+        print(pf_generate.describe_request(request))
+        return 0
+
+    token = args.api_key or os.environ.get("TRIPO_API_KEY")
+    if not token:
+        print(
+            "Kein API-Schluessel. Setze TRIPO_API_KEY oder gib --api-key an.\n"
+            "Schluessel gibt es unter https://platform.tripo3d.ai (Pay-as-you-go,\n"
+            "kein Abo; Text-zu-3D mit Textur kostet 20 Credits = 0,20 USD).\n"
+            "Ohne Schluessel zeigt --dry-run, was abgeschickt wuerde.",
+            file=sys.stderr,
+        )
+        return 2
+
+    out_dir = Path(args.out)
+    target = out_dir / f"{name}_raw.glb"
+    provider = pf_generate.TripoProvider(token=token)
+
+    def progress(state: pf_generate.TaskState) -> None:
+        print(f"  {state.status:<10} {state.progress:3d} %")
+
+    print(f"Erzeuge '{args.prompt}' als {name} ...")
+    try:
+        provider.run(request, target, on_progress=progress, timeout=args.timeout)
+    except pf_generate.GenerationError as exc:
+        print(f"\nGenerierung fehlgeschlagen: {exc}", file=sys.stderr)
+        return 1
+
+    print(f"Mesh: {target} ({target.stat().st_size / 1024:.0f} KiB)\n")
+
+    # Direkt weiter durch die vorhandene Eingangsstufe - der Generator liefert
+    # dasselbe Format, das die Pipeline ohnehin erwartet.
+    ingest_args = argparse.Namespace(
+        source=str(target), out=args.out, name=name,
+        max_texture=args.max_texture, material=args.material,
+    )
+    return cmd_ingest(ingest_args)
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     """Bereitet ein GLB fuer die Pipeline auf."""
     source = Path(args.source)
@@ -371,6 +428,24 @@ def main(argv: list[str] | None = None) -> int:
                    help="Texturen auf diese Kantenlaenge begrenzen")
     p.add_argument("--material", help="Kollisionsmaterial; ohne Angabe wird gefragt")
     p.set_defaults(func=cmd_ingest)
+
+    # generate haengt vor ingest: Prompt rein, fertiger Konfigurationsblock raus.
+    p = sub.add_parser("generate", help="Mesh erzeugen lassen und einlesen")
+    p.add_argument("prompt", help="Beschreibung des gewuenschten Objekts")
+    p.add_argument("--name", help="Prop-Name (Standard: aus dem Prompt)")
+    p.add_argument("--out", default="assets", help="Zielverzeichnis")
+    p.add_argument("--face-limit", type=int, default=8000,
+                   help="Dreiecksobergrenze schon beim Generator (0 = ohne)")
+    p.add_argument("--no-pbr", action="store_true", help="ohne PBR-Texturen erzeugen")
+    p.add_argument("--model", help=f"Modellversion festnageln, z.B. {pf_generate.KNOWN_MODEL_VERSION}")
+    p.add_argument("--api-key", help="Statt der Umgebungsvariablen TRIPO_API_KEY")
+    p.add_argument("--timeout", type=float, default=900.0, help="Wartezeit in Sekunden")
+    p.add_argument("--max-texture", type=int, default=2048,
+                   help="Texturen auf diese Kantenlaenge begrenzen")
+    p.add_argument("--material", help="Kollisionsmaterial; ohne Angabe wird gefragt")
+    p.add_argument("--dry-run", action="store_true",
+                   help="nur zeigen, was abgeschickt wuerde")
+    p.set_defaults(func=cmd_generate)
 
     # materials braucht weder Konfiguration noch Quelldatei.
     p = sub.add_parser("materials", help="Kollisionsmaterialien nachschlagen")

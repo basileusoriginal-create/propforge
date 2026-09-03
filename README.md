@@ -122,6 +122,31 @@ flags = 32                # 32 = "Static", der Normalfall für einen Prop
 # texture_dictionary = "" # Vorgabe: leer, weil die Texturen in der .ydr liegen
 ```
 
+## Mesh erzeugen lassen
+
+```bash
+export TRIPO_API_KEY=...
+python -m propforge.cli generate "ein rustikaler Holztisch aus Eiche" --face-limit 6000
+```
+
+Erzeugt das Mesh, lädt es herunter und reicht es direkt an `ingest` weiter —
+Texturen entpackt, Kollisionsmaterial abgefragt, `[[prop]]`-Block geschrieben.
+`--dry-run` zeigt ohne Schlüssel, was abgeschickt würde.
+
+**Warum Tripo:** Pay-as-you-go ohne Abo (1 Credit = 1 US-Cent, Text-zu-3D mit
+Textur = 20 Credits), kommerzielle Rechte hängen an der API-Nutzung ohne
+Namensnennung, und die Ausgabe ist GLB mit PBR-Texturen und einer
+Dreiecksobergrenze — genau das, was die Pipeline danach braucht. Bei Meshy
+braucht es für API und volles Eigentum den Pro-Plan; die kostenlose Stufe steht
+unter CC BY und verlangt Attribution im Endprodukt.
+
+Selbst hosten spart die laufenden Kosten, hat aber zwei Haken: **Hunyuan3D
+schließt die Europäische Union in seiner Lizenz ausdrücklich aus**
+(„excluding the territory of the European Union, United Kingdom and South
+Korea"), und TRELLIS.2 (MIT, kommerziell frei) kann nur Bild-zu-3D und will
+24 GB VRAM. Die Anbieterschnittstelle in `propforge/generate.py` ist deshalb
+bewusst schmal gehalten.
+
 ## Kollisionsmaterial
 
 Das Material bestimmt Schrittgeräusche, Einschlagpartikel, Reifengrip und
@@ -169,7 +194,7 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-276 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+298 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
 Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
 die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 
