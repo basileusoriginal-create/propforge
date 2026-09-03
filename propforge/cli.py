@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 
 from . import doctor as pf_doctor
+from . import ingest as pf_ingest
 from . import inspect as pf_inspect
 from . import packaging, preview as pf_preview, textures, validate
 from . import verify as pf_verify
@@ -191,6 +192,49 @@ def cmd_verify(args: argparse.Namespace) -> int:
     return _report(pf_verify.verify(config, build_dir))
 
 
+def cmd_ingest(args: argparse.Namespace) -> int:
+    """Bereitet ein GLB fuer die Pipeline auf."""
+    source = Path(args.source)
+    out_dir = Path(args.out)
+    name = args.name or source.stem.lower().replace("-", "_").replace(" ", "_")
+
+    info, _, _ = pf_ingest.inspect(source, name)
+    gltf, binary = pf_ingest.read_glb(source)
+    written = pf_ingest.extract_textures(gltf, binary, out_dir, name)
+
+    if args.max_texture:
+        from PIL import Image
+
+        for path in written.values():
+            with Image.open(path) as img:
+                if max(img.size) > args.max_texture:
+                    ratio = args.max_texture / max(img.size)
+                    resized = img.resize(
+                        (max(1, int(img.width * ratio)), max(1, int(img.height * ratio))),
+                        Image.LANCZOS,
+                    )
+                    resized.save(path)
+
+    info.textures = {role: str(path) for role, path in written.items()}
+    print(info.summary())
+
+    # Geometrie ohne die eingebetteten Texturen ablegen: die liegen jetzt
+    # als PNG daneben, und die Pipeline baut ihr eigenes Material daraus.
+    mesh_target = out_dir / f"{name}.glb"
+    pf_ingest.write_slim_glb(gltf, binary, mesh_target)
+    before = source.stat().st_size / 1024 / 1024
+    after = mesh_target.stat().st_size / 1024 / 1024
+    print(f"\nGeometrie: {before:.1f} MB -> {after:.1f} MB (Texturen ausgelagert)")
+
+    snippet = pf_ingest.config_snippet(info, mesh_target, out_dir)
+    snippet_path = out_dir.parent / f"{name}.toml"
+    snippet_path.write_text(snippet, encoding="utf-8")
+
+    print(f"\nKonfigurationsblock -> {snippet_path}\n")
+    print(snippet)
+    return 0
+
+
 def cmd_doctor(args: argparse.Namespace) -> int:
     checks = pf_doctor.run(blender=args.blender, texconv=args.texconv)
     text, ok = pf_doctor.summarize(checks)
@@ -225,6 +269,15 @@ def main(argv: list[str] | None = None) -> int:
         p.add_argument("--blender", help="Pfad zur Blender-Binary")
         p.add_argument("--texconv", help="Pfad zu texconv.exe")
         p.set_defaults(func=fn)
+
+    # ingest arbeitet auf einer Quelldatei, nicht auf einer Konfiguration.
+    p = sub.add_parser("ingest", help="GLB einlesen: Texturen entpacken, Konfiguration erzeugen")
+    p.add_argument("source", help="Pfad zur .glb-Datei")
+    p.add_argument("--out", default="assets", help="Zielverzeichnis")
+    p.add_argument("--name", help="Prop-Name (Standard: Dateiname)")
+    p.add_argument("--max-texture", type=int, default=2048,
+                   help="Texturen auf diese Kantenlaenge begrenzen")
+    p.set_defaults(func=cmd_ingest)
 
     # doctor braucht keine Konfiguration - es prueft nur die Umgebung.
     p = sub.add_parser("doctor", help="Umgebung pruefen (Blender, Sollumz, szio, texconv)")

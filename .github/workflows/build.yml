@@ -115,7 +115,9 @@ jobs:
           # Prop braucht. Auf ubuntu-latest ist es meist schon vorhanden.
           which convert magick || sudo apt-get install -y --no-install-recommends imagemagick
 
-      - name: Testasset erzeugen
+      - name: Synthetische Testobjekte erzeugen
+        # Das Desk-Asset liegt im Repo (echtes Marktplatz-Asset), die
+        # synthetischen kommen zur Laufzeit dazu.
         run: |
           python tools/make_testasset.py --out ci/assets --shape sphere  --name pf_testprop
           python tools/make_testasset.py --out ci/assets --shape torture --name pf_rig

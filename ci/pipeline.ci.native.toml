@@ -58,3 +58,20 @@ diffuse = "assets/pf_rig_albedo.png"
 normal = "assets/pf_rig_normal.png"
 roughness = "assets/pf_rig_roughness.png"
 metallic = "assets/pf_rig_metallic.png"
+
+
+# Echtes Marktplatz-Asset (Fab), durch propforge ingest aufbereitet.
+# Deckt ab, was synthetische Testobjekte nicht zeigen: gepackte
+# metallicRoughness, eingebettete Texturen, versetzter Ursprung.
+[[prop]]
+name = "pf_desk"
+mesh = "assets/pf_desk.glb"
+source_up = "y"
+max_tris = 2923
+center = "base"
+
+[prop.textures]
+diffuse = "assets/pf_desk_albedo.png"
+roughness = "assets/pf_desk_roughness.png"
+metallic = "assets/pf_desk_metallic.png"
+normal = "assets/pf_desk_normal.png"

@@ -191,6 +191,13 @@ def validate_prop(spec: PropSpec) -> list[Finding]:
             "Konvention, was Meshy und Tripo liefern) oder 'z' (Blender-Konvention).",
         )
 
+    if spec.center not in {"none", "xy", "base", "all"}:
+        add(
+            Level.ERROR,
+            "center_invalid",
+            f"center='{spec.center}' ist unbekannt. Moeglich: none, xy, base, all.",
+        )
+
     # --- Budget ---
     if spec.max_tris > 30000:
         add(Level.WARNING, "tris_high",

@@ -1,6 +1,9 @@
 out/
 ci/out/
-ci/assets/
-assets/
+# Nur der Asset-Ordner im Projektstamm wird ignoriert. ci/assets enthaelt das
+# versionierte Desk-Asset; die synthetischen Testobjekte erzeugt die CI selbst.
+/assets/
+ci/assets/pf_testprop*
+ci/assets/pf_rig*
 __pycache__/
 *.pyc

@@ -97,6 +97,18 @@ class PropSpec:
     # "y" ist die uebliche Konvention fuer OBJ und glTF und damit das, was
     # Meshy, Tripo und Rodin liefern. "z" ist Blender-Konvention.
     source_up: str = "y"
+    # Wohin der Ursprung gelegt wird.
+    #
+    # Marktplatz- und Generator-Assets sind selten am Ursprung modelliert. Ein
+    # Prop mit Mittelpunkt bei (1.07, -0.16, -0.60) steht im Spiel einen Meter
+    # neben der Stelle, an die man ihn setzt.
+    #
+    #   "none"  unveraendert lassen
+    #   "xy"    in X und Y zentrieren, Hoehe unangetastet
+    #   "base"  in X und Y zentrieren, Unterkante auf Z=0 (Standardfall fuer
+    #           Props, die auf dem Boden stehen)
+    #   "all"   in allen drei Achsen zentrieren
+    center: str = "none"
 
     def to_job(self, workdir: Path) -> dict[str, Any]:
         """Serialisiert den Prop als Job-Dict fuer die Blender-Stufe."""
@@ -110,6 +122,7 @@ class PropSpec:
             "lod_distances": self.lods.distances,
             "collision": asdict(self.collision),
             "source_up": self.source_up,
+            "center": self.center,
             "max_tris": self.max_tris,
         }
 
@@ -206,4 +219,5 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
         max_tris=int(merged.get("max_tris", 10000)),
         flip_normal_green=bool(merged.get("flip_normal_green", True)),
         source_up=str(merged.get("source_up", "y")).lower(),
+        center=str(merged.get("center", "none")).lower(),
     )

@@ -174,6 +174,45 @@ def cleanup_mesh(obj: bpy.types.Object) -> None:
     bpy.ops.object.shade_smooth()
 
 
+def apply_centering(obj: bpy.types.Object, mode: str) -> None:
+    """Legt den Ursprung an eine definierte Stelle des Objekts.
+
+    Assets aus Marktplaetzen und Generatoren sind selten am Ursprung
+    modelliert. Der Versatz faellt beim Bauen nicht auf -- die Datei ist
+    korrekt --, aber im Spiel steht der Prop dann neben der Setzposition.
+
+    "base" ist der Standardfall fuer Props, die auf dem Boden stehen: in X und
+    Y zentriert, Unterkante auf Z=0.
+    """
+    if mode == "none":
+        return
+
+    from mathutils import Vector
+
+    coords = [v.co for v in obj.data.vertices]
+    if not coords:
+        return
+
+    lo = Vector((min(c.x for c in coords), min(c.y for c in coords), min(c.z for c in coords)))
+    hi = Vector((max(c.x for c in coords), max(c.y for c in coords), max(c.z for c in coords)))
+    center = (lo + hi) / 2.0
+
+    offset = Vector((-center.x, -center.y, -center.z))
+    if mode == "xy":
+        offset.z = 0.0
+    elif mode == "base":
+        offset.z = -lo.z
+    elif mode != "all":
+        log(f"Unbekannter center-Modus '{mode}' - Ursprung bleibt unveraendert.")
+        return
+
+    for vertex in obj.data.vertices:
+        vertex.co += offset
+
+    log(f"Ursprung ausgerichtet ({mode}): verschoben um "
+        f"({offset.x:.3f}, {offset.y:.3f}, {offset.z:.3f})")
+
+
 def tri_count(obj: bpy.types.Object) -> int:
     """Zaehlt Dreiecke.
 
@@ -562,6 +601,7 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
 
     source = import_mesh(Path(job["mesh"]), job.get("source_up", "y"))
     cleanup_mesh(source)
+    apply_centering(source, job.get("center", "none"))
     ensure_uvs(source)
     clamp_to_budget(source, int(job["max_tris"]))
 
