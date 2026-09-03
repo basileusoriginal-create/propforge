@@ -36,6 +36,8 @@ def uv_sphere(segments: int = 48, rings: int = 24, radius: float = 0.5):
             ))
             uvs.append((u, 1.0 - v))
 
+    # Alle Indizes in diesem Modul sind 0-basiert. Erst write_obj rechnet auf
+    # die 1-basierte OBJ-Konvention um - an genau einer Stelle.
     faces: list[tuple[int, int, int]] = []
     stride = segments + 1
     for ring in range(rings):
@@ -44,9 +46,9 @@ def uv_sphere(segments: int = 48, rings: int = 24, radius: float = 0.5):
             b = a + stride
             # Pole erzeugen entartete Dreiecke - die werden uebersprungen.
             if ring != 0:
-                faces.append((a + 1, b + 1, a + 2))
+                faces.append((a, b, a + 1))
             if ring != rings - 1:
-                faces.append((a + 2, b + 1, b + 2))
+                faces.append((a + 1, b, b + 1))
     return positions, uvs, faces
 
 
@@ -155,16 +157,31 @@ def torture_rig():
 
     detail, detail_faces = uv_sphere(28, 18, radius=0.05)[0::2]
     detail = [(x, y, z + 0.58) for x, y, z in detail]
-    mesh.add(detail, [(a - 1, b - 1, c - 1) for a, b, c in detail_faces])
+    mesh.add(detail, detail_faces)
 
     return mesh.positions, mesh.uvs, mesh.faces
 
 
 def write_obj(path: Path, positions, uvs, faces) -> None:
+    """Schreibt ein OBJ.
+
+    OBJ zaehlt Indizes ab 1, dieses Modul intern ab 0. Die Umrechnung passiert
+    ausschliesslich hier -- vorher stand sie an zwei Stellen unterschiedlich,
+    wodurch das Gestell mit einem Versatz von einem Vertex in die Datei ging.
+    Jedes Dreieck verband dann die falschen Ecken. Im Speicher war die
+    Geometrie korrekt, nur die Datei war es nicht -- und Blender liest die Datei.
+    """
+    if faces and min(min(f) for f in faces) < 0:
+        raise ValueError("Negativer Vertexindex - die Eingabe ist nicht 0-basiert.")
+    if faces and max(max(f) for f in faces) >= len(positions):
+        raise ValueError("Vertexindex zeigt hinter das Ende der Vertexliste.")
+
     lines = ["# PropForge Testasset", "o pf_testprop"]
     lines += [f"v {x:.6f} {y:.6f} {z:.6f}" for x, y, z in positions]
     lines += [f"vt {u:.6f} {v:.6f}" for u, v in uvs]
-    lines += [f"f {a}/{a} {b}/{b} {c}/{c}" for a, b, c in faces]
+    lines += [
+        f"f {a + 1}/{a + 1} {b + 1}/{b + 1} {c + 1}/{c + 1}" for a, b, c in faces
+    ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 

@@ -138,6 +138,13 @@ jobs:
 
       # Schritt-Logs und Job-Zusammenfassung sind nur eingeloggt sichtbar.
       # Annotations rendert GitHub auch anonym - deshalb landet der Fehler dort.
+      # Auch ein erfolgreicher Lauf soll von aussen lesbar sein: ein Bild sagt
+      # nicht, wie gross das Objekt ist. Notice-Annotations rendert GitHub
+      # oeffentlich, Schritt-Logs nicht.
+      - name: Ergebnis als Annotation ausgeben
+        if: always()
+        run: python ci/report_build.py ci/out/build_result.json "Build (Linux)"
+
       - name: Fehler als Annotation ausgeben
         if: failure()
         run: python ci/report_failure.py ci-build.log "Pipeline (Linux, CWXML)"

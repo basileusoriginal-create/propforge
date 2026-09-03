@@ -569,6 +569,7 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
     # den Zahlen sofort erkennbar - und sonst an gar nichts, weil die
     # exportierte Datei formal einwandfrei ist.
     dims = source.dimensions
+    dimensions = {"x": round(dims.x, 4), "y": round(dims.y, 4), "z": round(dims.z, 4)}
     log(f"LOD0: {tri_count(source)} Dreiecke, "
         f"Abmessungen B{dims.x:.2f} x T{dims.y:.2f} x H{dims.z:.2f} m")
 
@@ -609,7 +610,7 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
     if render_dir is not None:
         previews = extract_lod_geometry(name, lod_meshes, Path(render_dir) / name)
 
-    return {"name": name, "previews": previews}
+    return {"name": name, "previews": previews, "dimensions": dimensions}
 
 
 def main(argv: list[str]) -> int:
