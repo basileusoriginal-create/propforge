@@ -149,7 +149,7 @@ pytest tests/                              # normal
 python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
 ```
 
-230 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
+238 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
 Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
 die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
 

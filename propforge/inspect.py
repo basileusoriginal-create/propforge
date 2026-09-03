@@ -41,6 +41,15 @@ class LodInfo:
     models: int
     geometries: int
     distance: float
+    # Vertex-Semantiken, die der Puffer tatsaechlich traegt - z.B.
+    # {"Position", "Normal", "Colour0", "TexCoord0", "Tangent"}.
+    #
+    # Das ist die Stelle, an der ein unsichtbarer Prop auffaellt: fehlt
+    # TexCoord0, hat das Modell keine Texturkoordinaten, egal wie viele
+    # Texturen eingebettet sind.
+    semantics: set[str] = field(default_factory=set)
+    vertices: int = 0
+    indices: int = 0
 
 
 @dataclass
@@ -79,6 +88,10 @@ class DrawableInfo:
                 f"  LOD {lod:<8} {info.models} Modell(e), "
                 f"{info.geometries} Geometrie(n), Sichtweite {info.distance:g} m"
             )
+            lines.append(
+                f"  {'':<12} {info.vertices} Vertices, {info.indices} Indizes, "
+                f"Semantik: {', '.join(sorted(info.semantics)) or '-'}"
+            )
         if self.textures:
             for t in self.textures:
                 flag = "" if t.is_power_of_two else "  <- keine Zweierpotenz!"
@@ -97,6 +110,53 @@ def _value(root: ET.Element, tag: str, default: float = 0.0) -> float:
         return float(node.attrib.get("value", default))
     except (TypeError, ValueError):
         return default
+
+
+def _find(node: ET.Element, tag: str) -> ET.Element | None:
+    """Erster Nachfahre mit diesem Tag, Gross-/Kleinschreibung egal."""
+    wanted = tag.lower()
+    for child in node.iter():
+        if child is not node and child.tag.lower() == wanted:
+            return child
+    return None
+
+
+def _rows(node: ET.Element | None) -> int:
+    if node is None:
+        return 0
+    return len([line for line in (node.text or "").splitlines() if line.strip()])
+
+
+def _values(node: ET.Element | None) -> int:
+    if node is None:
+        return 0
+    return len((node.text or "").split())
+
+
+def read_geometry(item: ET.Element) -> tuple[set[str], int, int]:
+    """Semantiken, Vertex- und Indexanzahl einer Geometrie.
+
+    Aufbau laut echtem Export (nicht geraten - aus der CI-Ausgabe abgelesen):
+
+        <VertexBuffer>
+          <Layout type="GTAV1"><Position /><Normal /><Colour0 /> ... </Layout>
+          <Data>eine Zeile je Vertex</Data>
+        </VertexBuffer>
+        <IndexBuffer><Data>alle Indizes</Data></IndexBuffer>
+    """
+    vertex_buffer = _find(item, "VertexBuffer")
+    index_buffer = _find(item, "IndexBuffer")
+
+    semantics: set[str] = set()
+    vertices = 0
+    if vertex_buffer is not None:
+        layout = _find(vertex_buffer, "Layout")
+        if layout is not None:
+            semantics = {child.tag for child in layout}
+        vertices = _rows(_find(vertex_buffer, "Data"))
+
+    indices = _values(_find(index_buffer, "Data")) if index_buffer is not None else 0
+    return semantics, vertices, indices
 
 
 def parse_drawable(path: str | Path) -> DrawableInfo:
@@ -147,12 +207,27 @@ def parse_drawable(path: str | Path) -> DrawableInfo:
         models = container.findall("Item")
         if not models:
             continue
-        geometries = sum(len(m.findall("./Geometries/Item")) for m in models)
+        items = [g for m in models for g in m.findall("./Geometries/Item")]
+
+        semantics: set[str] = set()
+        vertices = indices = 0
+        for item in items:
+            geo_semantics, geo_vertices, geo_indices = read_geometry(item)
+            # Vereinigung, nicht Schnittmenge: eine Geometrie ohne TexCoord0
+            # faellt so nicht auf. Genau dafuer gibt es die Pruefung in
+            # verify, die zusaetzlich jede Geometrie einzeln betrachtet.
+            semantics |= geo_semantics
+            vertices += geo_vertices
+            indices += geo_indices
+
         info.lods[level] = LodInfo(
             level=level,
             models=len(models),
-            geometries=geometries,
+            geometries=len(items),
             distance=_value(root, LOD_DIST_ELEMENTS[level], 9998.0),
+            semantics=semantics,
+            vertices=vertices,
+            indices=indices,
         )
 
     # --- Kollision ---

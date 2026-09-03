@@ -29,6 +29,9 @@ def make_ydr_xml(
     textures=(("pf_crate_d", "D3DFMT_DXT1", 1024, 1024),),
     bounds="GeometryBVH",
     geometries_per_lod=1,
+    semantics=("Position", "Normal", "Colour0", "TexCoord0", "Tangent"),
+    vertices=12,
+    indices=18,
 ):
     dist_high, dist_med, dist_low, dist_vlow = distances
     param_xml = "".join(
@@ -45,7 +48,16 @@ def make_ydr_xml(
         "low": "DrawableModelsLow",
         "verylow": "DrawableModelsVeryLow",
     }
-    geo = "".join('<Item><ShaderIndex value="0" /></Item>' for _ in range(geometries_per_lod))
+    layout = "".join(f"<{s} />" for s in semantics) if semantics else ""
+    vertex_rows = "\n".join("0 0 0" for _ in range(vertices))
+    index_values = " ".join("0" for _ in range(indices))
+    geo = "".join(
+        '<Item><ShaderIndex value="0" />'
+        f'<VertexBuffer><Layout type="GTAV1">{layout}</Layout>'
+        f"<Data>{vertex_rows}</Data></VertexBuffer>"
+        f"<IndexBuffer><Data>{index_values}</Data></IndexBuffer></Item>"
+        for _ in range(geometries_per_lod)
+    )
     lod_xml = "".join(
         f"<{element_for[l]}><Item><Geometries>{geo}</Geometries></Item></{element_for[l]}>"
         for l in lods
@@ -95,6 +107,26 @@ class TestParseDrawable:
     def test_counts_geometries(self, tmp_path):
         info = pf_inspect.parse_drawable(write_ydr(tmp_path, geometries_per_lod=3))
         assert info.lods["high"].geometries == 3
+
+    def test_reads_vertex_semantics(self, tmp_path):
+        info = pf_inspect.parse_drawable(write_ydr(tmp_path))
+        assert info.lods["high"].semantics == {
+            "Position", "Normal", "Colour0", "TexCoord0", "Tangent"}
+
+    def test_counts_vertices_and_indices(self, tmp_path):
+        info = pf_inspect.parse_drawable(write_ydr(tmp_path, vertices=30, indices=45))
+        assert info.lods["high"].vertices == 30
+        assert info.lods["high"].indices == 45
+
+    def test_sums_over_multiple_geometries(self, tmp_path):
+        info = pf_inspect.parse_drawable(
+            write_ydr(tmp_path, geometries_per_lod=3, vertices=10, indices=12))
+        assert info.lods["high"].vertices == 30
+        assert info.lods["high"].indices == 36
+
+    def test_summary_shows_semantics(self, tmp_path):
+        info = pf_inspect.parse_drawable(write_ydr(tmp_path))
+        assert "TexCoord0" in info.summary()
 
     def test_reads_samplers(self, tmp_path):
         info = pf_inspect.parse_drawable(write_ydr(tmp_path))
@@ -189,6 +221,34 @@ class TestVerifyDrawable:
             write_ydr(tmp_path, textures=(("t", "D3DFMT_DXT1", 1000, 1024),))
         )
         assert "texture_not_pot" in codes(pf_verify.verify_drawable(make_spec(), info))
+
+    def test_missing_texcoord_is_an_error(self, tmp_path):
+        # Der Fehler, der uns einen halben Tag gekostet hat: Geometrie
+        # vollstaendig, LODs korrekt, Texturen eingebettet, Sampler belegt -
+        # und trotzdem kein einziges Pixel Textur, weil die UV-Koordinaten
+        # nicht im Vertexpuffer stehen.
+        info = pf_inspect.parse_drawable(write_ydr(
+            tmp_path, semantics=("Position", "Normal", "Tangent")))
+        found = pf_verify.verify_drawable(make_spec(), info)
+        assert "vertex_texcoord_missing" in codes(found, Level.ERROR)
+
+    def test_missing_colour_warns(self, tmp_path):
+        info = pf_inspect.parse_drawable(write_ydr(
+            tmp_path, semantics=("Position", "Normal", "TexCoord0", "Tangent")))
+        found = pf_verify.verify_drawable(make_spec(), info)
+        assert "vertex_colour_missing" in codes(found, Level.WARNING)
+        assert "vertex_texcoord_missing" not in codes(found)
+
+    def test_texcoord_not_demanded_without_textures(self, tmp_path):
+        # Ohne gebundene Textur braucht es auch keine Texturkoordinaten.
+        info = pf_inspect.parse_drawable(write_ydr(
+            tmp_path, samplers=(), semantics=("Position", "Normal", "Colour0")))
+        assert "vertex_texcoord_missing" not in codes(
+            pf_verify.verify_drawable(make_spec(), info))
+
+    def test_empty_vertex_buffer_is_an_error(self, tmp_path):
+        info = pf_inspect.parse_drawable(write_ydr(tmp_path, vertices=0, indices=0))
+        assert "geometry_empty" in codes(pf_verify.verify_drawable(make_spec(), info), Level.ERROR)
 
     def test_lod_not_reduced_warns(self, tmp_path):
         xml = make_ydr_xml(geometries_per_lod=1)

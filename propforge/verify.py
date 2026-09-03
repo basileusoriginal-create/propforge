@@ -123,6 +123,47 @@ def verify_drawable(spec: PropSpec, info: DrawableInfo) -> list[Finding]:
                 f"Textur '{tex.name}' ist {tex.width}x{tex.height}, konfiguriert war {spec.texture_size}.",
             )
 
+    # --- Vertexdaten ---
+    #
+    # Der teuerste Fehler dieses Projekts stand genau hier und war unsichtbar:
+    # die Geometrie war vollstaendig, die LOD-Stufen stimmten, die Texturen
+    # waren eingebettet, die Sampler belegt - aber der Vertexpuffer trug nur
+    # Position, Normal und Tangent. Ohne TexCoord0 gibt es keine
+    # Texturkoordinaten, und der Prop ist im Spiel bestenfalls texturlos.
+    #
+    # Ursache war ein Namensunterschied ("UVMap" statt "UVMap 0"), den
+    # Sollumz mit einer Logzeile quittiert. Von aussen sah alles gut aus.
+    textures_bound = bool(info.samplers)
+    for lod, lod_info in info.lods.items():
+        if not lod_info.semantics:
+            continue
+
+        if textures_bound and "TexCoord0" not in lod_info.semantics:
+            add(
+                Level.ERROR,
+                "vertex_texcoord_missing",
+                f"LOD '{lod}': der Vertexpuffer hat kein TexCoord0, obwohl Texturen "
+                f"gebunden sind. Vorhanden ist nur: {', '.join(sorted(lod_info.semantics))}. "
+                "Meist heisst das, dass die UV-Map nicht 'UVMap 0' heisst.",
+            )
+
+        if "Colour0" not in lod_info.semantics:
+            add(
+                Level.WARNING,
+                "vertex_colour_missing",
+                f"LOD '{lod}': der Vertexpuffer hat kein Colour0. Die meisten "
+                "GTA-V-Shader erwarten Vertexfarben; ohne sie kann die Beleuchtung "
+                "falsch aussehen. Das Farb-Attribut muss 'Color 1' heissen.",
+            )
+
+        if lod_info.vertices == 0 or lod_info.indices == 0:
+            add(
+                Level.ERROR,
+                "geometry_empty",
+                f"LOD '{lod}': {lod_info.vertices} Vertices, {lod_info.indices} Indizes - "
+                "die Geometrie ist leer und waere im Spiel unsichtbar.",
+            )
+
     # --- Kollision ---
     if spec.collision.enabled and not info.has_collision:
         add(Level.ERROR, "collision_missing",
