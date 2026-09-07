@@ -171,17 +171,46 @@ class TestVerify:
             props=[make_spec(ytd="pack_props")])
         assert "ytd_missing" in codes(pf_verify.verify(config, build), Level.ERROR)
 
-    def test_present_ytd_file_passes(self, tmp_path):
+    def _pack(self, tmp_path, textures, props=("pf_crate",)):
         build = tmp_path / "build"
         (build / "pf_crate").mkdir(parents=True)
         (build / "pf_crate" / "pf_crate.ydr").write_bytes(b"x" * 5000)
         (build / "pf_crate" / "pf_crate_ityp.ytyp").write_bytes(b"x" * 500)
         (build / "_ytd").mkdir()
         (build / "_ytd" / "pack_props.ytd").write_bytes(b"x" * 2000)
+        if textures is not None:
+            (build / "_ytd" / "pack_props.textures.json").write_text(json.dumps({
+                "name": "pack_props", "props": list(props),
+                "textures": {t: f"/irgendwo/{t}.dds" for t in textures},
+            }), encoding="utf-8")
+        return build
+
+    def test_present_ytd_file_passes(self, tmp_path):
+        build = self._pack(tmp_path, ["pf_crate_d", "pf_crate_n"])
         config = PipelineConfig(
             resource_name="test", author="t", workdir=tmp_path,
             props=[make_spec(ytd="pack_props")])
-        assert "ytd_missing" not in codes(pf_verify.verify(config, build))
+        assert not codes(pf_verify.verify(config, build), Level.ERROR)
+
+    def test_ytd_without_this_props_textures_is_an_error(self, tmp_path):
+        """Der Fall, den ein zweiter Lauf ohne Begleitliste erzeugen wuerde.
+
+        Heute fuenf Props ins Woerterbuch, morgen fuenf weitere: die .ytd wird
+        jedes Mal komplett neu geschrieben. Sie ist dann da, hat eine
+        plausible Groesse - und die Props von gestern sind im Spiel weiss.
+        """
+        build = self._pack(tmp_path, ["pf_barrel_d"], props=["pf_barrel"])
+        config = PipelineConfig(
+            resource_name="test", author="t", workdir=tmp_path,
+            props=[make_spec(ytd="pack_props")])
+        assert "ytd_without_prop_textures" in codes(pf_verify.verify(config, build), Level.ERROR)
+
+    def test_missing_manifest_is_a_warning(self, tmp_path):
+        build = self._pack(tmp_path, None)
+        config = PipelineConfig(
+            resource_name="test", author="t", workdir=tmp_path,
+            props=[make_spec(ytd="pack_props")])
+        assert "ytd_manifest_missing" in codes(pf_verify.verify(config, build), Level.WARNING)
 
     def test_embedded_prop_is_not_asked_for_a_ytd(self, tmp_path):
         build = tmp_path / "build"
@@ -192,6 +221,155 @@ class TestVerify:
             resource_name="test", author="t", workdir=tmp_path,
             props=[make_spec()])
         assert "ytd_missing" not in codes(pf_verify.verify(config, build))
+
+
+# --- Gruppierung und Fortschreibung -----------------------------------------
+#
+# Die Blender-Stufe laesst sich hier nicht ausfuehren (kein bpy), aber die
+# beiden Entscheidungen, um die es geht, brauchen kein Blender: welche
+# Texturen in welches Woerterbuch gehoeren, und was beim zweiten Lauf mit den
+# Texturen des ersten passiert. Beides wird direkt aus dem Skript importiert.
+
+def load_build_module():
+    import importlib.util
+    from pathlib import Path as _P
+
+    path = _P(__file__).resolve().parent.parent / "blender" / "sz_build_prop.py"
+    source = path.read_text(encoding="utf-8")
+    # bpy und die Sollumz-Importe stehen im Kopf und sind hier nicht
+    # verfuegbar. Statt sie zu faelschen wird nur der Teil ausgefuehrt, der
+    # ohne sie auskommt - die reinen Entscheidungsfunktionen.
+    marker = "MANIFEST_SUFFIX = "
+    start = source.index(marker)
+    end = source.index("def build_texture_dictionary(")
+    namespace = {"json": json, "Path": __import__("pathlib").Path}
+    exec(compile(source[start:end], str(path), "exec"), namespace)
+
+    start = source.index("def collect_texture_dictionaries(")
+    end = source.index("def _written(")
+    namespace["texture_files"] = lambda job: [
+        __import__("pathlib").Path(job["texture_dir"]) / f"{job['name']}{s}.dds"
+        for s in ("_d", "_n", "_s")]
+    exec(compile(source[start:end], str(path), "exec"), namespace)
+    return namespace
+
+
+BUILD = load_build_module()
+
+
+def job(name, ytd, texture_dir="/t"):
+    return {"name": name, "ytd": ytd, "texture_dir": f"{texture_dir}/{name}",
+            "output_dir": f"/build/{name}", "ytd_dir": "/build/_ytd"}
+
+
+class TestGrouping:
+    def test_one_dictionary_per_name_not_per_prop(self):
+        """Genau der Punkt: gleiche Namen ueberschreiben sich NICHT.
+
+        Zehn Props mit demselben ytd-Namen ergeben ein Woerterbuch mit allen
+        Texturen - nicht zehn, von denen neun verlorengehen.
+        """
+        jobs = [job(f"pf_prop{i}", "pack_props") for i in range(10)]
+        groups = BUILD["collect_texture_dictionaries"](jobs, {j["name"] for j in jobs})
+        assert list(groups) == ["pack_props"]
+        _, files, props = groups["pack_props"]
+        assert len(props) == 10
+        assert len(files) == 30
+
+    def test_different_names_stay_apart(self):
+        jobs = [job("pf_a", "pack_eins"), job("pf_b", "pack_zwei")]
+        groups = BUILD["collect_texture_dictionaries"](jobs, {"pf_a", "pf_b"})
+        assert sorted(groups) == ["pack_eins", "pack_zwei"]
+
+    def test_embedded_props_form_no_group(self):
+        groups = BUILD["collect_texture_dictionaries"](
+            [job("pf_a", None)], {"pf_a"})
+        assert groups == {}
+
+    def test_failed_props_are_left_out(self):
+        """Sonst enthielte das Woerterbuch Texturen zu einem Prop, den es nicht gibt."""
+        jobs = [job("pf_a", "pack"), job("pf_b", "pack")]
+        groups = BUILD["collect_texture_dictionaries"](jobs, {"pf_a"})
+        assert groups["pack"][2] == ["pf_a"]
+
+
+class TestManifest:
+    def test_second_run_keeps_the_first_runs_textures(self, tmp_path):
+        """Der Fehler, den es ohne die Begleitliste gaebe.
+
+        Eine .ytd wird bei jedem Lauf komplett neu geschrieben. Ohne diese
+        Fortschreibung waeren die Props des ersten Laufs danach im Spiel
+        weiss - ohne fehlende Datei und ohne Meldung.
+        """
+        first = tmp_path / "pf_tisch_d.dds"
+        first.write_bytes(b"x")
+        manifest = tmp_path / "pack.textures.json"
+        manifest.write_text(json.dumps({
+            "name": "pack", "props": ["pf_tisch"],
+            "textures": {"pf_tisch_d": str(first)},
+        }), encoding="utf-8")
+
+        second = tmp_path / "pf_stuhl_d.dds"
+        second.write_bytes(b"x")
+        known, props, gone = BUILD["merge_with_manifest"](manifest, [second], ["pf_stuhl"])
+
+        assert sorted(known) == ["pf_stuhl_d", "pf_tisch_d"]
+        assert props == ["pf_stuhl", "pf_tisch"]
+        assert gone == []
+
+    def test_deleted_textures_drop_out(self, tmp_path):
+        """Die Liste ist ein Wegweiser, kein zweiter Wahrheitsstand.
+
+        Was nicht mehr auf der Platte liegt, kann nicht eingebettet werden -
+        also faellt es raus statt den Lauf zu kippen.
+        """
+        manifest = tmp_path / "pack.textures.json"
+        manifest.write_text(json.dumps({
+            "name": "pack", "props": ["pf_alt"],
+            "textures": {"pf_alt_d": str(tmp_path / "weg.dds")},
+        }), encoding="utf-8")
+        neu = tmp_path / "pf_neu_d.dds"
+        neu.write_bytes(b"x")
+
+        known, _, gone = BUILD["merge_with_manifest"](manifest, [neu], ["pf_neu"])
+        assert sorted(known) == ["pf_neu_d"]
+        assert gone == ["pf_alt_d"]
+
+    def test_rebuilt_texture_wins_over_the_listed_path(self, tmp_path):
+        """Neu gebaut heisst neu: der aktuelle Lauf ueberschreibt den Eintrag."""
+        alt = tmp_path / "alt" / "pf_tisch_d.dds"
+        alt.parent.mkdir()
+        alt.write_bytes(b"x")
+        neu = tmp_path / "neu" / "pf_tisch_d.dds"
+        neu.parent.mkdir()
+        neu.write_bytes(b"y")
+        manifest = tmp_path / "pack.textures.json"
+        manifest.write_text(json.dumps({
+            "name": "pack", "props": ["pf_tisch"], "textures": {"pf_tisch_d": str(alt)},
+        }), encoding="utf-8")
+
+        known, _, _ = BUILD["merge_with_manifest"](manifest, [neu], ["pf_tisch"])
+        assert known["pf_tisch_d"] == neu
+
+    def test_no_manifest_yet_is_the_normal_first_run(self, tmp_path):
+        dds = tmp_path / "pf_tisch_d.dds"
+        dds.write_bytes(b"x")
+        known, props, gone = BUILD["merge_with_manifest"](
+            tmp_path / "fehlt.json", [dds], ["pf_tisch"])
+        assert sorted(known) == ["pf_tisch_d"]
+        assert props == ["pf_tisch"]
+        assert gone == []
+
+    def test_broken_manifest_stops_the_run(self, tmp_path):
+        """Kaputte Liste heisst: unbekannt, was frueher drin war.
+
+        Stillschweigend neu anzufangen wuerde alle frueheren Props weiss
+        machen. Lieber laut abbrechen.
+        """
+        manifest = tmp_path / "pack.textures.json"
+        manifest.write_text("{kaputt", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="kein gueltiges JSON"):
+            BUILD["merge_with_manifest"](manifest, [], [])
 
 
 # --- Die Abfrage -------------------------------------------------------------

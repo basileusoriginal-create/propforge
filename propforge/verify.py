@@ -6,6 +6,7 @@ Zusammen schliessen sie die Schleife, ohne dass GTA V dafuer laufen muss.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 from .config import LOD_LEVELS, PipelineConfig, PropSpec
@@ -333,15 +334,50 @@ def _verify_ytd_file(spec: PropSpec, build_dir: Path) -> list[Finding]:
         return []
 
     name = str(spec.ytd)
-    if list(build_dir.rglob(f"{name}.ytd")) or list(build_dir.rglob(f"{name}.ytd.xml")):
-        return []
+    if not (list(build_dir.rglob(f"{name}.ytd")) or list(build_dir.rglob(f"{name}.ytd.xml"))):
+        return [Finding(
+            Level.ERROR, "ytd_missing",
+            f"'{spec.name}' verweist auf das Texturwoerterbuch '{name}', in "
+            f"{build_dir} liegt aber keine {name}.ytd. Der Prop waere im Spiel weiss.",
+            prop=spec.name,
+        )]
 
-    return [Finding(
-        Level.ERROR, "ytd_missing",
-        f"'{spec.name}' verweist auf das Texturwoerterbuch '{name}', in "
-        f"{build_dir} liegt aber keine {name}.ytd. Der Prop waere im Spiel weiss.",
-        prop=spec.name,
-    )]
+    # Dass die Datei da ist, heisst nicht, dass dieser Prop darin vorkommt.
+    #
+    # Der Fall dahinter: eine .ytd wird bei jedem Lauf komplett neu
+    # geschrieben. Wer heute fuenf Props in ein Woerterbuch baut und morgen
+    # fuenf weitere, haette ohne die Begleitliste morgen eine .ytd mit nur den
+    # neuen darin. Die Datei existiert, die Groesse sieht plausibel aus, und
+    # die fuenf von gestern sind im Spiel weiss.
+    manifests = list(build_dir.rglob(f"{name}.textures.json"))
+    if not manifests:
+        return [Finding(
+            Level.WARNING, "ytd_manifest_missing",
+            f"Zu '{name}.ytd' fehlt die Begleitliste {name}.textures.json. "
+            "Ohne sie laesst sich nicht pruefen, welche Props darin stecken - "
+            "und ein spaeterer Lauf wuerde das Woerterbuch auf seine eigenen "
+            "Texturen zusammenstreichen.",
+            prop=spec.name,
+        )]
+
+    try:
+        data = json.loads(manifests[0].read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return [Finding(Level.ERROR, "ytd_manifest_unreadable",
+                        f"{manifests[0].name}: {exc}", prop=spec.name)]
+
+    textures = list(data.get("textures") or {})
+    mine = [t for t in textures if t.lower().startswith(f"{spec.name.lower()}_")]
+    if not mine:
+        return [Finding(
+            Level.ERROR, "ytd_without_prop_textures",
+            f"'{name}.ytd' enthaelt keine Textur zu '{spec.name}' "
+            f"(drin sind: {', '.join(sorted(textures)) or 'nichts'}). "
+            "Der Prop waere im Spiel weiss.",
+            prop=spec.name,
+        )]
+
+    return []
 
 
 def _verify_size(spec: PropSpec, path: Path) -> list[Finding]:

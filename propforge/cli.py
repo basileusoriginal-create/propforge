@@ -177,7 +177,10 @@ def cmd_build(args: argparse.Namespace) -> int:
     print(f"\nGebaut: {len(succeeded)}/{result.get('total', 0)}")
     for entry in result.get("texture_dictionaries", []):
         files = ", ".join(f"{f['file']} ({f['bytes']} Bytes)" for f in entry.get("files", []))
+        props = entry.get("props", [])
         print(f"  Texturwoerterbuch {entry['name']}: {files}")
+        print(f"    {len(entry.get('textures', []))} Texturen fuer "
+              f"{len(props)} Prop(s): {', '.join(props) or '-'}")
     for failure in failed:
         print(f"  FEHLGESCHLAGEN {failure['name']}: {failure['error']}", file=sys.stderr)
 

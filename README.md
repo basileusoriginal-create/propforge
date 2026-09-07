@@ -177,9 +177,29 @@ Der Name landet in der Begleitdatei (`"ytd": "pack_props"`), wird
 kleingeschrieben und entleerzeichnet — RAGE sucht Texturwörterbücher über
 einen Hash des kleingeschriebenen Namens, `Pack Props` lädt also nie, und zwar
 ohne Fehlermeldung. Beim Bauen entsteht daraus `work/ausgabe/build/_ytd/pack_props.ytd`,
-und der Archetyp bekommt `textureDictionary` gesetzt. `verify` prüft beide
-Enden: dass die `.ydr` die Texturen dann *nicht* mehr enthält und dass die
-`.ytd`, auf die verwiesen wird, auch existiert.
+und der Archetyp bekommt `textureDictionary` gesetzt.
+
+**Ein Name, eine Datei.** Zehn Props mit demselben ytd-Namen ergeben *eine*
+`.ytd` mit allen dreißig Texturen — nicht zehn, die sich gegenseitig
+überschreiben. Die Gruppierung passiert vor dem Bauen; die `.ytd` entsteht in
+einem eigenen Durchgang am Ende, weil die Blender-Szene vor jedem Prop geleert
+wird und ein gemeinsames Wörterbuch darin gar nicht wachsen könnte.
+
+**Über mehrere Läufe hinweg auch.** Eine `.ytd` wird bei jedem Lauf komplett
+neu geschrieben. Wer heute fünf Props in `pack_props` baut und morgen fünf
+weitere, hätte morgen sonst ein Wörterbuch mit nur den neuen darin — Datei
+vorhanden, Größe plausibel, die fünf von gestern im Spiel weiß. Deshalb liegt
+neben der `.ytd` eine Liste `pack_props.textures.json` mit dem, was drinsteckt;
+der nächste Lauf schreibt sie fort. Sie ist kein zweiter Wahrheitsstand:
+gebaut wird aus den DDS auf der Platte, und was dort nicht mehr liegt, fällt
+mit einer Meldung raus.
+
+Geprüft wird an drei Stellen, weil ein falscher Verweis im Spiel keinen Fehler
+auslöst, sondern nur einen weißen Prop: die Blender-Stufe vergleicht den
+Archetyp-Wert gegen die tatsächlichen Materialnodes, liest die geschriebene
+`.ytd` zurück und zählt die Texturen nach; `verify` prüft, dass die `.ydr` die
+Texturen *nicht* mehr enthält, dass die `.ytd` existiert und dass sie eine
+Textur zu diesem Prop führt.
 
 ## Mehrere ytyps zu einer zusammenfassen
 

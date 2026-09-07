@@ -903,13 +903,63 @@ EXPORT_SETTINGS = {
 
 # --- Texturwoerterbuch (.ytd) ------------------------------------------------
 
+MANIFEST_SUFFIX = ".textures.json"
+
+
+def manifest_for(out_dir: Path, name: str) -> Path:
+    return out_dir / f"{name}{MANIFEST_SUFFIX}"
+
+
+def merge_with_manifest(
+    path: Path, dds_files: list[Path], props: list[str],
+) -> tuple[dict[str, Path], list[str], list[str]]:
+    """Vereinigt die Texturen dieses Laufs mit denen frueherer Laeufe.
+
+    Der Grund ist ein Fehler, der ohne das hier still passiert waere: eine
+    .ytd wird bei jedem Lauf komplett neu geschrieben. Wer heute fuenf Props
+    in 'pack_props' baut und morgen fuenf weitere, haette morgen eine .ytd
+    mit nur den fuenf neuen darin - und die fuenf von gestern waeren im Spiel
+    weiss. Nichts haette gefehlt, keine Datei, keine Meldung.
+
+    Deshalb liegt neben der .ytd eine Liste dessen, was drinsteckt. Sie ist
+    kein zweiter Wahrheitsstand: gebaut wird aus den DDS auf der Platte, und
+    was dort nicht mehr liegt, faellt hier raus. Die Liste sagt nur, wo noch
+    zu suchen ist.
+    """
+    known: dict[str, Path] = {}
+    gone: list[str] = []
+    if path.is_file():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"{path.name} ist kein gueltiges JSON ({exc}). Die Datei sagt, "
+                "welche Texturen aus frueheren Laeufen in dieses Woerterbuch "
+                "gehoeren - ohne sie waeren die Props dieser Laeufe im Spiel "
+                "weiss. Entweder reparieren oder alle Props neu bauen."
+            ) from exc
+        for texture_name, raw in (data.get("textures") or {}).items():
+            candidate = Path(raw)
+            if candidate.is_file():
+                known[texture_name] = candidate
+            else:
+                gone.append(texture_name)
+        props = sorted(set(props) | set(data.get("props") or []))
+
+    for dds in dds_files:
+        known[dds.stem.lower()] = dds
+
+    return known, sorted(props), gone
+
+
 def build_texture_dictionary(
     name: str,
     dds_files: list[Path],
     out_dir: Path,
     fmt: str,
     version: str,
-) -> list[dict]:
+    props: list[str] | None = None,
+) -> dict:
     """Baut eine .ytd aus fertigen DDS-Dateien.
 
     Warum ein eigener Durchgang und nicht nebenbei beim Prop: die Szene wird
@@ -922,7 +972,15 @@ def build_texture_dictionary(
     die Quelle, aus der auch die Shader ihre Texturnamen ableiten - damit
     koennen die beiden nicht auseinanderlaufen.
     """
-    if not dds_files:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    manifest = manifest_for(out_dir, name)
+    known, props, gone = merge_with_manifest(manifest, dds_files, list(props or []))
+
+    for texture_name in gone:
+        log(f"  {name}: '{texture_name}' aus einem frueheren Lauf liegt nicht "
+            "mehr auf der Platte - faellt raus.")
+
+    if not known:
         raise RuntimeError(
             f"Texturwoerterbuch '{name}': keine DDS-Dateien gefunden. Die "
             "Props wuerden auf ein leeres Woerterbuch verweisen und im Spiel "
@@ -930,10 +988,10 @@ def build_texture_dictionary(
         )
 
     reset_scene()
-    out_dir.mkdir(parents=True, exist_ok=True)
 
     txd = bpy.context.scene.sz_txds.new_texture_dictionary(name=name)
-    for dds in dds_files:
+    for texture_name in sorted(known):
+        dds = known[texture_name]
         image = bpy.data.images.load(str(dds), check_existing=True)
         txd.new_texture(image)
         log(f"  {name}: + {dds.name}")
@@ -957,7 +1015,8 @@ def build_texture_dictionary(
         raise RuntimeError(f"YTD-Export lieferte {result} statt FINISHED.")
 
     # Und wieder gegen die Platte pruefen statt gegen den Rueckgabewert.
-    written = _written(out_dir, name, ".ytd")
+    written = [p for p in _written(out_dir, name, ".ytd")
+               if not p.name.endswith(MANIFEST_SUFFIX)]
     if not written:
         existing = [p.name for p in out_dir.iterdir() if p.is_file()] or ["(nichts)"]
         raise RuntimeError(
@@ -966,28 +1025,85 @@ def build_texture_dictionary(
             "darauf verweisen, waeren im Spiel weiss."
         )
 
+    check_texture_dictionary(written[0], sorted(known))
+
+    manifest.write_text(
+        json.dumps({
+            "name": name,
+            "props": props,
+            "textures": {k: str(v) for k, v in sorted(known.items())},
+        }, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     for path in written:
         log(f"  geschrieben: {path.name} ({path.stat().st_size} Bytes)")
-    return [{"file": p.name, "bytes": p.stat().st_size} for p in written]
+    log(f"  {name}: {len(known)} Texturen fuer {len(props)} Prop(s).")
+    return {
+        "name": name,
+        "props": props,
+        "textures": sorted(known),
+        "files": [{"file": p.name, "bytes": p.stat().st_size} for p in written],
+    }
+
+
+def check_texture_dictionary(path: Path, expected: list[str]) -> None:
+    """Liest die geschriebene .ytd zurueck und zaehlt nach.
+
+    Dass der Export zurueckkehrt, heisst nicht, dass jede Textur drin ist.
+    Eine .ytd, der eine Textur fehlt, ist im Spiel nicht von einer kaputten
+    zu unterscheiden - die betroffene Flaeche ist weiss, alles andere sieht
+    richtig aus. Genau die Art Fehler, die man sonst erst im Spiel findet.
+    """
+    try:
+        from szio import VPath
+        from szio.gta5 import try_load_asset
+    except ImportError:
+        log(f"  Hinweis: {path.name} kann nicht gegengelesen werden (szio "
+            "fehlt) - der Inhalt bleibt ungeprueft.")
+        return
+
+    result = try_load_asset(VPath(path), return_target=True)
+    if result is None:
+        raise RuntimeError(
+            f"Die geschriebene {path.name} laesst sich nicht wieder lesen. "
+            "Sie waere im Spiel unbrauchbar."
+        )
+
+    actual = sorted(name.lower() for name in result[0].textures)
+    want = sorted(n.lower() for n in expected)
+    if actual != want:
+        missing = sorted(set(want) - set(actual))
+        extra = sorted(set(actual) - set(want))
+        raise RuntimeError(
+            f"{path.name} enthaelt {len(actual)} Texturen, erwartet waren "
+            f"{len(want)}. Fehlt: {missing or '-'}. Zuviel: {extra or '-'}."
+        )
 
 
 def collect_texture_dictionaries(
     jobs: list[dict], built: set[str],
-) -> dict[str, tuple[Path, list[Path]]]:
-    """Ordnet jedem ytd-Namen seinen Zielordner und seine DDS zu.
+) -> dict[str, tuple[Path, list[Path], list[str]]]:
+    """Ordnet jedem ytd-Namen seinen Zielordner, seine DDS und seine Props zu.
+
+    Ein Name, ein Woerterbuch - egal wie viele Props darauf zeigen. Genau
+    dafuer ist das Gruppieren da: zehn Props mit demselben ytd-Namen ergeben
+    eine .ytd mit allen dreissig Texturen, nicht zehn, die sich gegenseitig
+    ueberschreiben.
 
     Nur erfolgreich gebaute Props zaehlen: eine .ytd mit Texturen zu einem
     Prop, den es nicht gibt, waere unnoetiger Ballast im Pack - und in einem
     Batch mit einem kaputten Prop faellt sie sonst still groesser aus als der
     Inhalt hergibt.
     """
-    groups: dict[str, tuple[Path, list[Path]]] = {}
+    groups: dict[str, tuple[Path, list[Path], list[str]]] = {}
     for job in jobs:
         ytd = job.get("ytd")
         if not ytd or job.get("name") not in built:
             continue
         out_dir = Path(job.get("ytd_dir") or Path(job["output_dir"]).parent / "_ytd")
-        _, files = groups.setdefault(str(ytd), (out_dir, []))
+        _, files, props = groups.setdefault(str(ytd), (out_dir, [], []))
+        props.append(str(job["name"]))
         for dds in texture_files(job):
             if dds not in files:
                 files.append(dds)
@@ -1297,11 +1413,11 @@ def main(argv: list[str]) -> int:
     # die Szene zwischen ihnen geleert wird.
     dictionaries: list[dict] = []
     groups = collect_texture_dictionaries(jobs, set(succeeded))
-    for ytd_name, (ytd_dir, dds_files) in sorted(groups.items()):
+    for ytd_name, (ytd_dir, dds_files, props) in sorted(groups.items()):
         log(f"=== Texturwoerterbuch {ytd_name} ===")
         try:
-            files = build_texture_dictionary(ytd_name, dds_files, ytd_dir, args.format, args.version)
-            dictionaries.append({"name": ytd_name, "files": files})
+            dictionaries.append(build_texture_dictionary(
+                ytd_name, dds_files, ytd_dir, args.format, args.version, props))
         except Exception as exc:  # noqa: BLE001
             import traceback
 
