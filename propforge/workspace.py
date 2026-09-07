@@ -33,6 +33,7 @@ from typing import Any
 
 from .config import (
     DEFAULT_PROFILE,
+    normalize_ytd_name,
     PROFILES,
     CollisionSettings,
     PipelineConfig,
@@ -64,8 +65,10 @@ class Job:
     model: str | None = None
     source_up: str = "y"
     center: str = "none"
-    # Vorgemerkt fuer die ytd-Produktion: ist ein Name gesetzt, sollen die
-    # Texturen spaeter nicht eingebettet, sondern separat ausgegeben werden.
+    # Ist ein Name gesetzt, wandern die Texturen nicht in die .ydr, sondern in
+    # eine eigene .ytd dieses Namens. Mehrere Auftraege duerfen denselben Namen
+    # tragen - dann teilen sie sich ein Woerterbuch, was fuer ein Pack der
+    # ganze Sinn der Uebung ist.
     ytd: str | None = None
     created: str | None = None
     textures: dict[str, str] = field(default_factory=dict)
@@ -113,6 +116,7 @@ class Job:
             collision=CollisionSettings(material=self.material),
             source_up=self.source_up,
             center=self.center,
+            ytd=self.ytd or None,
             max_tris=PROFILES.get(self.profile, PROFILES[DEFAULT_PROFILE]).max_tris,
             texture_size=PROFILES.get(self.profile, PROFILES[DEFAULT_PROFILE]).texture_size,
             lods=_lods_for(self.profile),
@@ -155,7 +159,7 @@ def read_job(mesh: Path) -> Job:
         model=data.get("model"),
         source_up=str(data.get("source_up") or "y"),
         center=str(data.get("center") or "none"),
-        ytd=data.get("ytd"),
+        ytd=normalize_ytd_name(data.get("ytd")),
         created=data.get("created"),
         textures=dict(data.get("textures") or {}),
     )

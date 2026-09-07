@@ -140,6 +140,11 @@ class _Raises:
     def __init__(self, expected, match=None):
         self.expected = expected
         self.match = match
+        # Wie bei pytest: nach dem Block liegt die gefangene Ausnahme hier.
+        # Damit laesst sich pruefen, was in der Meldung steht - und nicht nur,
+        # dass ueberhaupt eine kam. Bei diesem Projekt ist der Text der
+        # Fehlermeldung oft die eigentliche Funktion.
+        self.value = None
 
     def __enter__(self):
         return self
@@ -149,6 +154,7 @@ class _Raises:
             raise AssertionError(f"Erwartete {self.expected.__name__}, aber nichts wurde geworfen.")
         if not issubclass(exc_type, self.expected):
             return False
+        self.value = exc
         if self.match is not None:
             import re
             if not re.search(self.match, str(exc)):

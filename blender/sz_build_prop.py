@@ -444,6 +444,27 @@ def clamp_to_budget(obj: bpy.types.Object, max_tris: int) -> None:
 
 # --- Material ---------------------------------------------------------------
 
+# Rollen-Suffix -> Samplername im Sollumz-Nodetree.
+SAMPLERS = {
+    "_d": "DiffuseSampler",
+    "_n": "BumpSampler",
+    "_s": "SpecSampler",
+}
+
+
+def texture_files(job: dict) -> list[Path]:
+    """Die DDS-Dateien dieses Auftrags, in fester Reihenfolge.
+
+    Bewusst eine gemeinsame Funktion fuer Shader und Texturwoerterbuch: beide
+    muessen exakt dieselben Dateien sehen. Zwei getrennte Aufzaehlungen waeren
+    frueher oder spaeter nicht mehr deckungsgleich, und eine Textur, die der
+    Shader nennt aber die .ytd nicht enthaelt, faellt erst im Spiel auf.
+    """
+    texture_dir = Path(job["texture_dir"])
+    files = [texture_dir / f"{job['name']}{suffix}.dds" for suffix in SAMPLERS]
+    return [p for p in files if p.is_file()]
+
+
 def build_material(job: dict, mesh_obj: bpy.types.Object) -> bpy.types.Material:
     """Erzeugt ein Sollumz-Shadermaterial und haengt die DDS-Texturen ein."""
     shader_name = job["shader"]
@@ -451,12 +472,12 @@ def build_material(job: dict, mesh_obj: bpy.types.Object) -> bpy.types.Material:
     mat.name = f"{job['name']}_mat"
 
     texture_dir = Path(job["texture_dir"])
-    # Rollen-Suffix -> Samplername im Sollumz-Nodetree
-    mapping = {
-        "_d": "DiffuseSampler",
-        "_n": "BumpSampler",
-        "_s": "SpecSampler",
-    }
+    mapping = SAMPLERS
+
+    # Eingebettet heisst: die Bilddaten wandern in die .ydr. Sonst bleiben sie
+    # draussen, der Shader traegt nur den Namen, und eine .ytd liefert die
+    # Daten nach.
+    embed = bool(job.get("embed_textures", True))
 
     attached = 0
     for suffix, sampler in mapping.items():
@@ -472,10 +493,16 @@ def build_material(job: dict, mesh_obj: bpy.types.Object) -> bpy.types.Material:
         # Sollumz leitet den Namen aus dem Dateipfad ab (Basisname ohne Endung,
         # kleingeschrieben). Es reicht also, die DDS unter dem gewuenschten
         # Namen zu laden - was die Texturstufe ohnehin tut.
-        # Eingebettet: die Textur wandert in die .ydr statt in eine separate .ytd.
-        node.texture_properties.embedded = True
+        #
+        # Genau diese Ableitung ist auch der Grund, warum die .ytd spaeter aus
+        # denselben Dateien gebaut wird: Shader und Woerterbuch kommen so
+        # zwangslaeufig auf denselben Namen. Zwei getrennte Namensquellen
+        # waeren eine Fehlerquelle, die man erst im Spiel sieht.
+        node.texture_properties.embedded = embed
         attached += 1
-        log(f"  {sampler:<15} <- {dds.name} (Texturname: {node.sollumz_texture_name})")
+        log(f"  {sampler:<15} <- {dds.name} "
+            f"(Texturname: {node.sollumz_texture_name}, "
+            f"{'eingebettet' if embed else 'aus ytd'})")
 
     if attached == 0:
         log(f"Warnung: keine Textur an '{shader_name}' gebunden - liegen die DDS in {texture_dir}?")
@@ -745,6 +772,25 @@ def has_embedded_texture(drawable: bpy.types.Object) -> bool:
     return False
 
 
+def has_any_texture(drawable: bpy.types.Object) -> bool:
+    """Haengt ueberhaupt ein Bild an einem Material des Drawables?
+
+    Ohne diese Unterscheidung wuerde ein bewusst texturloser Prop als Fehler
+    gelten: kein eingebettetes Bild, kein Woerterbuch - formal derselbe
+    Zustand wie ein kaputter ytd-Verweis, inhaltlich aber voellig in Ordnung.
+    """
+    for child in [drawable, *drawable.children_recursive]:
+        data = getattr(child, "data", None)
+        for mat in getattr(data, "materials", None) or ():
+            tree = getattr(mat, "node_tree", None)
+            if tree is None:
+                continue
+            for node in tree.nodes:
+                if isinstance(node, bpy.types.ShaderNodeTexImage) and node.image:
+                    return True
+    return False
+
+
 def has_embedded_collision(drawable: bpy.types.Object) -> bool:
     return any(
         getattr(child, "sollum_type", None) == SollumType.BOUND_COMPOSITE
@@ -794,16 +840,30 @@ def create_ytyp(drawable: bpy.types.Object, settings: dict) -> str:
     # die es nicht gibt.
     archetype.physics_dictionary = name if has_embedded_collision(drawable) else ""
 
-    # Texturwoerterbuch: nur setzen, wenn die Texturen NICHT eingebettet sind.
-    # Eingebettete Texturen liegen in der .ydr selbst; ein Verweis auf eine
-    # nicht existierende .ytd waere ein Fehler ohne Nutzen.
-    override = settings.get("texture_dictionary")
-    if override is not None:
-        archetype.texture_dictionary = str(override)
-    elif has_embedded_texture(drawable):
-        archetype.texture_dictionary = ""
-    else:
-        archetype.texture_dictionary = name
+    # Texturwoerterbuch. Der Wert kommt aus der Konfiguration: leer, wenn die
+    # Texturen eingebettet sind, sonst der ytd-Name.
+    #
+    # Und danach die Gegenprobe am Modell. Der Archetyp sagt, wo das Spiel die
+    # Texturen suchen soll; die Materialnodes sagen, wo sie tatsaechlich
+    # landen. Laufen die beiden auseinander, ist der Prop im Spiel weiss -
+    # ohne fehlende Datei, ohne Fehlermeldung, ohne irgendeinen anderen
+    # Hinweis. Es ist der billigste Moment, das zu bemerken.
+    wanted = settings.get("texture_dictionary")
+    archetype.texture_dictionary = "" if wanted is None else str(wanted)
+
+    embedded = has_embedded_texture(drawable)
+    if embedded and archetype.texture_dictionary:
+        raise RuntimeError(
+            f"'{name}': Der Archetyp verweist auf das Texturwoerterbuch "
+            f"'{archetype.texture_dictionary}', die Texturen sind aber in der "
+            ".ydr eingebettet. Das Spiel wuerde beides laden und im Zweifel "
+            "das falsche nehmen."
+        )
+    if not embedded and not archetype.texture_dictionary and has_any_texture(drawable):
+        raise RuntimeError(
+            f"'{name}': Die Texturen sind nicht eingebettet, der Archetyp "
+            "nennt aber kein Texturwoerterbuch. Der Prop waere im Spiel weiss."
+        )
 
     log(f"YTYP '{ytyp_name}': Archetyp '{archetype.name}' "
         f"(asset={archetype.asset_name}, lodDist={archetype.lod_dist:g}, "
@@ -839,6 +899,99 @@ EXPORT_SETTINGS = {
     "export_ytds": False,
     "export_ytds_include": "ALL",
 }
+
+
+# --- Texturwoerterbuch (.ytd) ------------------------------------------------
+
+def build_texture_dictionary(
+    name: str,
+    dds_files: list[Path],
+    out_dir: Path,
+    fmt: str,
+    version: str,
+) -> list[dict]:
+    """Baut eine .ytd aus fertigen DDS-Dateien.
+
+    Warum ein eigener Durchgang und nicht nebenbei beim Prop: die Szene wird
+    vor jedem Prop geleert. Ein Woerterbuch, das sich mehrere Props teilen,
+    kann darin gar nicht wachsen - der letzte Prop haette es auf seine eigenen
+    Texturen zurechtgestutzt, ohne dass irgendetwas fehlschlaegt. Genau das
+    ist der Fall, den ein Pack braucht: zehn Props, eine .ytd.
+
+    Deshalb entsteht sie am Ende aus den DDS auf der Platte. Die sind ohnehin
+    die Quelle, aus der auch die Shader ihre Texturnamen ableiten - damit
+    koennen die beiden nicht auseinanderlaufen.
+    """
+    if not dds_files:
+        raise RuntimeError(
+            f"Texturwoerterbuch '{name}': keine DDS-Dateien gefunden. Die "
+            "Props wuerden auf ein leeres Woerterbuch verweisen und im Spiel "
+            "weiss erscheinen."
+        )
+
+    reset_scene()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    txd = bpy.context.scene.sz_txds.new_texture_dictionary(name=name)
+    for dds in dds_files:
+        image = bpy.data.images.load(str(dds), check_existing=True)
+        txd.new_texture(image)
+        log(f"  {name}: + {dds.name}")
+
+    settings = dict(EXPORT_SETTINGS)
+    settings["export_ytds"] = True
+    # SELECTED, aus demselben Grund wie bei den ytyps: new_texture_dictionary
+    # waehlt das eben angelegte Woerterbuch aus, und nur das soll raus.
+    settings["export_ytds_include"] = "SELECTED"
+    settings["limit_to_selected"] = True
+
+    result = bpy.ops.sollumz.export_assets(
+        directory=str(out_dir),
+        direct_export=True,
+        use_custom_settings=True,
+        target_formats={fmt},
+        target_versions={version},
+        **settings,
+    )
+    if result != {"FINISHED"}:
+        raise RuntimeError(f"YTD-Export lieferte {result} statt FINISHED.")
+
+    # Und wieder gegen die Platte pruefen statt gegen den Rueckgabewert.
+    written = _written(out_dir, name, ".ytd")
+    if not written:
+        existing = [p.name for p in out_dir.iterdir() if p.is_file()] or ["(nichts)"]
+        raise RuntimeError(
+            f"Der Export hat keine .ytd fuer '{name}' erzeugt. Im "
+            f"Zielverzeichnis liegt: {', '.join(existing)}. Alle Props, die "
+            "darauf verweisen, waeren im Spiel weiss."
+        )
+
+    for path in written:
+        log(f"  geschrieben: {path.name} ({path.stat().st_size} Bytes)")
+    return [{"file": p.name, "bytes": p.stat().st_size} for p in written]
+
+
+def collect_texture_dictionaries(
+    jobs: list[dict], built: set[str],
+) -> dict[str, tuple[Path, list[Path]]]:
+    """Ordnet jedem ytd-Namen seinen Zielordner und seine DDS zu.
+
+    Nur erfolgreich gebaute Props zaehlen: eine .ytd mit Texturen zu einem
+    Prop, den es nicht gibt, waere unnoetiger Ballast im Pack - und in einem
+    Batch mit einem kaputten Prop faellt sie sonst still groesser aus als der
+    Inhalt hergibt.
+    """
+    groups: dict[str, tuple[Path, list[Path]]] = {}
+    for job in jobs:
+        ytd = job.get("ytd")
+        if not ytd or job.get("name") not in built:
+            continue
+        out_dir = Path(job.get("ytd_dir") or Path(job["output_dir"]).parent / "_ytd")
+        _, files = groups.setdefault(str(ytd), (out_dir, []))
+        for dds in texture_files(job):
+            if dds not in files:
+                files.append(dds)
+    return groups
 
 
 def _written(out_dir: Path, stem: str, marker: str) -> list[Path]:
@@ -1139,6 +1292,30 @@ def main(argv: list[str]) -> int:
                 log(f"  {line}")
             failures.append({"name": name, "error": str(exc), "traceback": trace})
 
+    # Texturwoerterbuecher zum Schluss, aus den DDS der gebauten Props.
+    # Siehe build_texture_dictionary: waehrend der Props geht es nicht, weil
+    # die Szene zwischen ihnen geleert wird.
+    dictionaries: list[dict] = []
+    groups = collect_texture_dictionaries(jobs, set(succeeded))
+    for ytd_name, (ytd_dir, dds_files) in sorted(groups.items()):
+        log(f"=== Texturwoerterbuch {ytd_name} ===")
+        try:
+            files = build_texture_dictionary(ytd_name, dds_files, ytd_dir, args.format, args.version)
+            dictionaries.append({"name": ytd_name, "files": files})
+        except Exception as exc:  # noqa: BLE001
+            import traceback
+
+            trace = traceback.format_exc()
+            log(f"FEHLER beim Texturwoerterbuch '{ytd_name}':")
+            for line in trace.splitlines():
+                log(f"  {line}")
+            failures.append({"name": ytd_name, "error": str(exc), "traceback": trace})
+            # Die Props, die auf dieses Woerterbuch zeigen, sind ohne es
+            # unbrauchbar - sie gelten deshalb nicht mehr als gebaut.
+            for job in jobs:
+                if job.get("ytd") == ytd_name and job.get("name") in succeeded:
+                    succeeded.remove(job["name"])
+
     log(f"Fertig: {len(succeeded)}/{len(jobs)} Props gebaut.")
 
     # Ergebnisbericht schreiben. Der Exit-Code allein reicht nicht: Blender
@@ -1155,6 +1332,7 @@ def main(argv: list[str]) -> int:
                     "succeeded": succeeded,
                     "failed": failures,
                     "props": previews,
+                    "texture_dictionaries": dictionaries,
                 },
                 indent=2,
                 ensure_ascii=False,

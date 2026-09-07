@@ -247,13 +247,33 @@ def verify_ytyp(spec: PropSpec, info: YtypInfo, drawable: DrawableInfo | None) -
             "keine Kollision gebaut wurde - das Spiel sucht eine .ybn, die es "
             "nicht gibt.")
 
-    # Texturen liegen eingebettet in der .ydr. Ein Verweis auf eine .ytd waere
-    # ins Leere gerichtet.
-    if spec.ytyp.texture_dictionary is None and drawable is not None:
-        if drawable.textures and archetype.texture_dictionary:
-            add(Level.WARNING, "archetype_texture_dictionary",
-                f"textureDictionary ist '{archetype.texture_dictionary}', die "
-                "Texturen liegen aber eingebettet in der .ydr.")
+    # Texturen: der Archetyp sagt, wo das Spiel sie sucht. Zeigt er ins Leere
+    # oder gar nirgendwohin, ist der Prop im Spiel weiss - ohne fehlende
+    # Datei und ohne Fehlermeldung. Das ist der Grund, warum es hier drei
+    # Faelle gibt statt einer Warnung.
+    wanted = spec.texture_dictionary()
+    if archetype.texture_dictionary.lower() != wanted.lower():
+        # Die Schwere haengt daran, in welche Richtung es auseinanderlaeuft.
+        #
+        # Steht ein Woerterbuch da, obwohl die Texturen in der .ydr liegen,
+        # ist es ueberfluessig: das Spiel findet die Texturen trotzdem, nur
+        # der Verweis geht ins Leere. Aergerlich, nicht kaputt.
+        #
+        # Fehlt es dagegen oder zeigt es auf etwas anderes, waehrend die
+        # Texturen ausgelagert sind, findet das Spiel gar nichts - der Prop
+        # ist weiss. Das ist ein Fehler.
+        harmless = not wanted and spec.embed_textures()
+        add(Level.WARNING if harmless else Level.ERROR, "archetype_texture_dictionary",
+            f"textureDictionary ist '{archetype.texture_dictionary or '(leer)'}', "
+            f"erwartet war '{wanted or '(leer, Texturen eingebettet)'}'.")
+
+    if drawable is not None:
+        if not spec.embed_textures() and drawable.textures:
+            add(Level.ERROR, "textures_embedded_unexpectedly",
+                f"Die .ydr enthaelt {len(drawable.textures)} eingebettete "
+                f"Textur(en), obwohl sie aus '{spec.ytd}' kommen sollten. "
+                "Beides zu laden kostet doppelt Speicher, und welche das "
+                "Spiel nimmt, ist nicht festgelegt.")
 
     return findings
 
@@ -296,8 +316,32 @@ def verify(config: PipelineConfig, build_dir: Path | None = None) -> list[Findin
                 findings.extend(verify_drawable(spec, info))
 
         findings.extend(_verify_ytyp_file(spec, build_dir, info))
+        findings.extend(_verify_ytd_file(spec, build_dir))
 
     return findings
+
+
+def _verify_ytd_file(spec: PropSpec, build_dir: Path) -> list[Finding]:
+    """Gibt es das Texturwoerterbuch, auf das der Prop verweist?
+
+    Der Fall, den das abfaengt, ist einer der leiseren: die .ydr ist korrekt,
+    die .ytyp ist korrekt, sie nennt ein Woerterbuch - und das Woerterbuch
+    wurde nicht gebaut. Im Spiel ist der Prop dann weiss, und nichts in der
+    Ausgabe deutet darauf hin.
+    """
+    if spec.embed_textures():
+        return []
+
+    name = str(spec.ytd)
+    if list(build_dir.rglob(f"{name}.ytd")) or list(build_dir.rglob(f"{name}.ytd.xml")):
+        return []
+
+    return [Finding(
+        Level.ERROR, "ytd_missing",
+        f"'{spec.name}' verweist auf das Texturwoerterbuch '{name}', in "
+        f"{build_dir} liegt aber keine {name}.ytd. Der Prop waere im Spiel weiss.",
+        prop=spec.name,
+    )]
 
 
 def _verify_size(spec: PropSpec, path: Path) -> list[Finding]:

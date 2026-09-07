@@ -81,8 +81,10 @@ zeigt das vollständige Blender-Log; das gebaute Asset liegt als Artefakt
 - **Vertex-Painting.** Die Pipeline legt die vom Shader verlangten
   Farb-Attribute an und setzt sie auf neutrales Weiß. Eine gestaltete
   Bemalung (grün innen, rot außen) für weichere Beleuchtung bleibt Handarbeit.
-- **Mehrere Props in einer ytyp.** Jeder Prop bekommt seine eigene
-  Archetyp-Definition. Für große Packs wäre eine gemeinsame ytyp sparsamer.
+- **Eine gemeinsame ytyp direkt beim Bauen.** Jeder Prop bekommt zunächst
+  seine eigene Archetyp-Definition — das hält einen fehlgeschlagenen Prop
+  lokal. Für die Auslieferung fasst `merge-ytyp` sie zusammen; sie gleich
+  gemeinsam zu erzeugen, wäre einen Schritt kürzer.
 
 ## Voraussetzungen
 
@@ -149,6 +151,55 @@ Nach dem Umwandeln wandern die verarbeiteten Meshes nach `work/fertig`. **Was
 fehlschlägt, bleibt im Eingang liegen** und kommt beim nächsten Lauf wieder
 dran. In der `propforge.toml` steht einmalig der Blender-Pfad, damit
 `--blender` nicht jedes Mal nötig ist.
+
+## Texturen: eingebettet oder als gemeinsame .ytd
+
+`convert` fragt bei jedem neuen Prop, wohin die Texturen sollen:
+
+```
+  Texturen (e = eingebettet in die .ydr | Name = gemeinsame .ytd) [e]>
+```
+
+Der Unterschied ist eine Speicherentscheidung, keine Geschmacksfrage.
+**Eingebettet** ist für einen einzelnen Prop das Robustere: eine Datei, nichts
+kann getrennt voneinander verloren gehen. Aber jede `.ydr` trägt ihre Texturen
+selbst — zehn Props mit derselben Holztextur laden sie zehnmal. Eine
+**gemeinsame `.ytd`** lädt sie einmal, und genau darum geht es bei einem Pack.
+
+Für einen ganzen Stapel entscheidet man einmal statt zehnmal:
+
+```bash
+python -m propforge.cli convert --ytd pack_props   # alle in ein Wörterbuch
+python -m propforge.cli convert --embed            # alle eingebettet
+```
+
+Der Name landet in der Begleitdatei (`"ytd": "pack_props"`), wird
+kleingeschrieben und entleerzeichnet — RAGE sucht Texturwörterbücher über
+einen Hash des kleingeschriebenen Namens, `Pack Props` lädt also nie, und zwar
+ohne Fehlermeldung. Beim Bauen entsteht daraus `work/ausgabe/build/_ytd/pack_props.ytd`,
+und der Archetyp bekommt `textureDictionary` gesetzt. `verify` prüft beide
+Enden: dass die `.ydr` die Texturen dann *nicht* mehr enthält und dass die
+`.ytd`, auf die verwiesen wird, auch existiert.
+
+## Mehrere ytyps zu einer zusammenfassen
+
+Ein Pack mit sechzig Props hat sechzig Archetyp-Dateien und sechzig Zeilen
+`DLC_ITYP_REQUEST` im Manifest — sechzig Gelegenheiten, eine zu vergessen.
+
+```bash
+python -m propforge.cli merge-ytyp work/ausgabe/build --name pack_props
+python -m propforge.cli merge-ytyp ordner --format CWXML --dry-run
+```
+
+Reines CWXML läuft ohne Blender; für binäre `.ytyp` (und für `--format NATIVE`)
+wird Blender gebraucht, weil dort szio steckt.
+
+**Bei Namensgleichheit bricht der Merger ab**, statt still zu entscheiden. Zwei
+Archetypen mit gleichem Namen sind kein Fehler, den irgendetwas meldet — das
+Spiel nimmt einen davon, und welchen, hängt an der Ladereihenfolge. Ein Prop
+zeigt dann im Spiel das Modell eines anderen. Sind die beiden Feld für Feld
+identisch (derselbe Prop zweimal gebaut), ist die Wahl folgenlos und einer
+wird übernommen.
 
 ## Größenklassen
 

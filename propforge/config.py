@@ -167,6 +167,20 @@ class CollisionSettings:
 ARCHETYPE_FLAG_STATIC = 32
 
 
+def normalize_ytd_name(raw: object) -> str | None:
+    """Bringt einen ytd-Namen in die Form, die das Spiel erwartet.
+
+    RAGE sucht Texturwoerterbuecher ueber einen Hash des kleingeschriebenen
+    Namens. Ein Name mit Grossbuchstaben oder Leerzeichen laedt deshalb nicht -
+    und zwar ohne Fehlermeldung: der Prop erscheint einfach weiss. Das hier
+    frueh zu erledigen ist billiger, als es spaeter im Spiel zu suchen.
+    """
+    if raw is None:
+        return None
+    name = str(raw).strip().lower().replace(" ", "_")
+    return name or None
+
+
 @dataclass
 class YtypSettings:
     """Archetyp-Definition, die den Prop im Spiel ueberhaupt erst spawnbar macht.
@@ -234,9 +248,38 @@ class PropSpec:
     #   "all"   in allen drei Achsen zentrieren
     center: str = "none"
     ytyp: YtypSettings = field(default_factory=YtypSettings)
+    # Name einer gemeinsamen .ytd. Leer/None = Texturen liegen eingebettet in
+    # der .ydr.
+    #
+    # Der Unterschied ist keine Geschmacksfrage, sondern eine
+    # Speicherentscheidung. Eingebettet ist bequem - eine Datei, nichts kann
+    # auseinanderlaufen -, aber jede .ydr traegt ihre Texturen selbst. Zehn
+    # Props mit derselben Holztextur laden sie zehnmal. Eine gemeinsame .ytd
+    # laedt sie einmal, und genau darum geht es bei einem Pack.
+    #
+    # Die Kette daraus: der Shader bekommt den Texturnamen, aber die Bilddaten
+    # bleiben draussen (embedded=False), die .ytd wird aus denselben DDS
+    # gebaut, und der Archetyp verweist mit textureDictionary darauf. Faellt
+    # eines der drei aus, ist der Prop im Spiel weiss.
+    ytd: str | None = None
 
     def ytyp_name(self) -> str:
         return self.ytyp.name or f"{self.name}_ityp"
+
+    def embed_textures(self) -> bool:
+        """Wandern die Texturen in die .ydr oder in eine eigene .ytd?"""
+        return not self.ytd
+
+    def texture_dictionary(self) -> str:
+        """Was im Archetyp als textureDictionary stehen muss.
+
+        Ein ausdruecklicher Eintrag in [prop.ytyp] gewinnt - damit laesst sich
+        auf ein fremdes Woerterbuch verweisen, etwa ein Vanilla-txd. Sonst
+        entscheidet, ob eine eigene .ytd gebaut wird.
+        """
+        if self.ytyp.texture_dictionary is not None:
+            return str(self.ytyp.texture_dictionary)
+        return "" if self.embed_textures() else str(self.ytd)
 
     def archetype_lod_dist(self) -> float:
         """Sichtweite des Archetyps - abgeleitet, wenn nicht gesetzt."""
@@ -258,13 +301,22 @@ class PropSpec:
             "source_up": self.source_up,
             "center": self.center,
             "max_tris": self.max_tris,
+            "embed_textures": self.embed_textures(),
+            "ytd": self.ytd or None,
+            # Gemeinsame Woerterbuecher liegen neben den Prop-Ordnern, nicht
+            # darin: sie gehoeren keinem einzelnen Prop.
+            "ytd_dir": str((workdir / "build" / "_ytd").resolve()),
             "ytyp": {
                 "enabled": self.ytyp.enabled,
                 "name": self.ytyp_name(),
                 "lod_dist": self.archetype_lod_dist(),
                 "hd_texture_dist": self.ytyp.hd_texture_dist,
                 "flags": self.ytyp.flags,
-                "texture_dictionary": self.ytyp.texture_dictionary,
+                # Nicht mehr der Rohwert aus der Konfiguration: die Blender-
+                # Stufe soll nicht selbst herleiten muessen, ob eingebettet
+                # wird. Sie hat dafuer nur den Umweg ueber die Materialnodes,
+                # und genau der hat frueher schon danebengelegen.
+                "texture_dictionary": self.texture_dictionary(),
             },
         }
 
@@ -419,4 +471,5 @@ def _prop_from_dict(raw: dict[str, Any], defaults: dict[str, Any], base: Path) -
         flip_normal_green=bool(merged.get("flip_normal_green", True)),
         source_up=str(merged.get("source_up", "y")).lower(),
         center=str(merged.get("center", "none")).lower(),
+        ytd=normalize_ytd_name(merged.get("ytd")),
     )

@@ -16,6 +16,11 @@ Lokale Routine ueber Ordner (kein Bearbeiten von Konfigurationsdateien):
     propforge init                        Arbeitsordner anlegen
     propforge batch                       mehrere Assets erfragen und erzeugen
     propforge convert                     alles im Eingang zu GTA-Dateien machen
+
+Fuer ein Pack:
+
+    propforge convert --ytd pack_props    Texturen in eine gemeinsame .ytd
+    propforge merge-ytyp <ordner>         alle .ytyp zu einer zusammenfassen
 """
 
 from __future__ import annotations
@@ -35,6 +40,7 @@ from . import inspect as pf_inspect
 from . import packaging, preview as pf_preview, textures, validate
 from . import verify as pf_verify
 from . import workspace as pf_workspace
+from . import ytyp_merge as pf_ytyp_merge
 from . import config as pf_config
 from .config import PipelineConfig
 from .validate import Level
@@ -169,6 +175,9 @@ def cmd_build(args: argparse.Namespace) -> int:
     succeeded = result.get("succeeded", [])
 
     print(f"\nGebaut: {len(succeeded)}/{result.get('total', 0)}")
+    for entry in result.get("texture_dictionaries", []):
+        files = ", ".join(f"{f['file']} ({f['bytes']} Bytes)" for f in entry.get("files", []))
+        print(f"  Texturwoerterbuch {entry['name']}: {files}")
     for failure in failed:
         print(f"  FEHLGESCHLAGEN {failure['name']}: {failure['error']}", file=sys.stderr)
 
@@ -331,6 +340,175 @@ def _ask_material(name: str) -> str:
         print(f"  '{answer}' gibt es nicht - mit '?{answer}' suchen.")
 
 
+def _ask_ytd(name: str, default: str | None = None) -> str | None:
+    """Eingebettete Texturen oder eine gemeinsame .ytd?
+
+    Der Vorschlag ist bewusst 'eingebettet': fuer einen einzelnen Prop ist das
+    die robustere Wahl - eine Datei, nichts kann getrennt voneinander verloren
+    gehen. Lohnend wird die .ytd erst, wenn sich mehrere Props Texturen
+    teilen; dann laedt das Spiel sie einmal statt pro Prop.
+    """
+    while True:
+        answer = _ask(
+            "  Texturen (e = eingebettet in die .ydr | Name = gemeinsame .ytd)",
+            default or "e",
+        )
+        if answer.lower() in {"e", "eingebettet", "embedded"}:
+            return None
+        ytd = pf_config.normalize_ytd_name(answer)
+        if not ytd:
+            continue
+        if ytd == name.lower():
+            # Gleicher Name fuer Drawable und Woerterbuch geht technisch, aber
+            # beide landen als '<name>.ydr' und '<name>.ytd' in stream/ und
+            # sind dort nicht mehr auseinanderzuhalten, wenn etwas fehlt.
+            print(f"  '{ytd}' ist schon der Propname - besser etwas wie "
+                  f"'{ytd}_txd' oder ein Packname.")
+            continue
+        return ytd
+
+
+def _collect_ytyps(source: Path) -> list[Path]:
+    """Die .ytyp-Dateien hinter dem Argument - Ordner oder Einzeldatei."""
+    if source.is_file():
+        return [source]
+    if not source.is_dir():
+        raise FileNotFoundError(f"'{source}' gibt es nicht.")
+    return sorted(
+        p for p in source.iterdir()
+        if p.is_file() and (p.name.lower().endswith(".ytyp.xml")
+                            or p.suffix.lower() == ".ytyp")
+    )
+
+
+def cmd_merge_ytyp(args: argparse.Namespace) -> int:
+    """Fasst alle .ytyp eines Ordners zu einer zusammen.
+
+    Fuer ein Pack ist eine Datei besser als sechzig: eine Zeile im Manifest
+    statt sechzig, und keine Gelegenheit, eine davon zu vergessen.
+    """
+    source = Path(args.source)
+    try:
+        paths = _collect_ytyps(source)
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+
+    if not paths:
+        print(f"Keine .ytyp in {source} gefunden.", file=sys.stderr)
+        return 2
+
+    name = pf_config.normalize_ytd_name(
+        args.name or (source.stem if source.is_file() else source.name))
+    out_dir = Path(args.out) if args.out else (
+        source.parent if source.is_file() else source) / "merged"
+
+    # Ein frueheres Ergebnis nicht wieder mit einsammeln. Bei der Vorgabe
+    # (Unterordner 'merged') kann das nicht passieren, mit --out schon - und
+    # zweimal laufen lassen ist genau das, was man tut, wenn ein Prop
+    # dazugekommen ist.
+    own = {(out_dir / f"{name}.ytyp.xml").resolve(), (out_dir / f"{name}.ytyp").resolve()}
+    paths = [p for p in paths if p.resolve() not in own]
+    if not paths:
+        print(f"In {source} liegt nur das Ergebnis eines frueheren Laufs.",
+              file=sys.stderr)
+        return 2
+
+    binary = [p for p in paths if not p.name.lower().endswith(".ytyp.xml")]
+    print(f"{len(paths)} Datei(en) in {source}:")
+    for path in paths:
+        print(f"  {path.name}")
+    print()
+
+    # Der kurze Weg, wenn es ihn gibt: reines XML braucht kein Blender. Der
+    # Unterschied ist keine Kosmetik - ohne Blender laeuft das hier in
+    # Millisekunden und ist hier im Projekt vollstaendig getestet, waehrend
+    # der Binaerweg auf szio in Blenders Python angewiesen ist.
+    if not binary and args.format == "CWXML":
+        out_path = out_dir / f"{name}.ytyp.xml"
+        try:
+            if args.dry_run:
+                plan = pf_ytyp_merge.plan_merge(paths, name)
+            else:
+                plan = pf_ytyp_merge.merge(paths, name, out_path)
+        except pf_ytyp_merge.MergeError as exc:
+            print(f"Abgebrochen: {exc}", file=sys.stderr)
+            return 1
+
+        for archetype in plan.archetype_names:
+            print(f"  + {archetype}")
+        for duplicate in plan.duplicates:
+            print(f"  = {duplicate} (identisch, einmal uebernommen)")
+        for path, why in plan.skipped:
+            print(f"  - {path.name}: {why}")
+        if args.dry_run:
+            print(f"\n{len(plan.entries)} Archetypen kaemen in '{name}.ytyp.xml'.")
+            return 0
+        print(f"\n{len(plan.entries)} Archetypen -> {out_path} "
+              f"({out_path.stat().st_size} Bytes)")
+        _print_manifest_hint(name, len(paths))
+        return 0
+
+    if args.dry_run:
+        print("--dry-run gibt es nur fuer CWXML: eine binaere .ytyp laesst "
+              "sich nur in Blender lesen, und dann ist das Zusammenfassen "
+              "auch schon fast erledigt.", file=sys.stderr)
+        return 2
+
+    blender = args.blender or shutil.which("blender") or shutil.which("blender.exe")
+    if blender is None:
+        kind = "binaere .ytyp" if binary else f"Format {args.format}"
+        print(f"Fuer {kind} wird Blender gebraucht (dort steckt szio). "
+              "Mit --blender <pfad> angeben.", file=sys.stderr)
+        return 2
+
+    script = Path(__file__).resolve().parent.parent / "blender" / "sz_merge_ytyp.py"
+    result_file = out_dir / "merge_result.json"
+    if result_file.exists():
+        result_file.unlink()
+
+    cmd = [
+        blender, "--background", "--python", str(script), "--",
+        "--input", *[str(p) for p in paths],
+        "--name", name,
+        "--out", str(out_dir),
+        "--format", args.format,
+        "--version", args.version,
+        "--result", str(result_file),
+    ]
+    print("$ " + " ".join(cmd))
+    returncode = subprocess.run(cmd).returncode
+
+    # Wie beim Build: der Exit-Code von Blender im Hintergrundmodus ist keine
+    # verlaessliche Quelle. Der Bericht ist es.
+    if not result_file.exists():
+        print("\nBlender hat keinen Ergebnisbericht geschrieben - der Grund "
+              "steht weiter oben in der Ausgabe.", file=sys.stderr)
+        return returncode or 1
+
+    report = json.loads(result_file.read_text(encoding="utf-8"))
+    for archetype in report.get("archetypes", []):
+        print(f"  + {archetype}")
+    files = ", ".join(f"{f['file']} ({f['bytes']} Bytes)" for f in report.get("files", []))
+    print(f"\n{len(report.get('archetypes', []))} Archetypen -> {files}")
+    _print_manifest_hint(name, len(paths))
+    return 0
+
+
+def _print_manifest_hint(name: str, replaced: int) -> None:
+    """Sagt, was jetzt noch im fxmanifest zu tun ist.
+
+    Ohne diesen Hinweis waere die Zusammenfassung eine Falle: die alten .ytyp
+    stehen weiter im Manifest, die neue nicht. Das Spiel laedt dann entweder
+    beides (und meldet doppelte Archetypen) oder die Sammel-ytyp gar nicht -
+    und der Prop erscheint einfach nicht.
+    """
+    print(f"\nIm fxmanifest.lua die {replaced} bisherigen Zeilen ersetzen durch:")
+    print(f"    data_file 'DLC_ITYP_REQUEST' 'stream/{name}.ytyp'")
+    print("Und die alten .ytyp aus stream/ entfernen - sonst laedt das Spiel "
+          "dieselben Archetypen zweimal.")
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     """Legt die Arbeitsordner und die Vorlage an."""
     workspace = pf_workspace.Workspace.load(args.root)
@@ -449,12 +627,28 @@ def cmd_convert(args: argparse.Namespace) -> int:
     # antworten kann. Im Skriptbetrieb wird geschaetzt und das ausdruecklich
     # gesagt, statt auf eine Eingabe zu warten, die nie kommt.
     interactive = sys.stdin.isatty() and not args.no_ask
+
+    # Eine Vorgabe fuer den ganzen Lauf schlaegt die Nachfrage. Fuer ein Pack
+    # ist das der eigentliche Fall: zehn GLBs in den Eingang, ein '--ytd
+    # pack_name', fertig - statt zehnmal dieselbe Antwort zu tippen.
+    forced_ytd: str | None = pf_config.normalize_ytd_name(getattr(args, "ytd", None))
+    forced_embed = bool(getattr(args, "embed", False))
+    if forced_ytd and forced_embed:
+        print("--ytd und --embed schliessen sich aus.", file=sys.stderr)
+        return 2
+
+    # Beim Nachfragen die letzte Antwort als Vorschlag weiterreichen: wer
+    # gerade ein Pack einliest, meint beim zweiten Prop fast immer dasselbe
+    # Woerterbuch wie beim ersten.
+    last_ytd: str | None = None
     for job in jobs:
         if pf_workspace.sidecar_for(job.mesh).is_file():
             continue
 
         guess = _guess_profile(job.mesh)
         material, keyword = pf_materials.suggest(job.name)
+        if forced_ytd or forced_embed:
+            job.ytd = forced_ytd
         if not interactive:
             job.profile, job.material = guess, material
             print(f"  {job.name}: keine Begleitdatei - geschaetzt: "
@@ -463,11 +657,15 @@ def cmd_convert(args: argparse.Namespace) -> int:
             print(f"\n{job.name} hat keine Begleitdatei:")
             job.profile = _ask_profile(guess)
             job.material = _ask_material(job.name)
+            if not (forced_ytd or forced_embed):
+                job.ytd = _ask_ytd(job.name, last_ytd)
+                last_ytd = job.ytd
         job.write()
 
     print(f"\n{len(jobs)} Asset(s) im Eingang:")
     for job in jobs:
-        print(f"  {job.name:<28} {job.profile:<9} {job.material}")
+        print(f"  {job.name:<28} {job.profile:<9} {job.material:<22} "
+              f"{'ytd:' + job.ytd if job.ytd else 'Texturen eingebettet'}")
     print()
 
     # Texturen aus den Meshes holen und die Begleitdaten vervollstaendigen.
@@ -735,7 +933,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--format", default="NATIVE", choices=["NATIVE", "CWXML"])
     p.add_argument("--no-ask", action="store_true",
                    help="nicht nachfragen, fehlende Angaben schaetzen")
+    p.add_argument("--ytd", metavar="NAME",
+                   help="Texturen in eine gemeinsame .ytd dieses Namens "
+                        "statt in die .ydr (fuer den ganzen Lauf)")
+    p.add_argument("--embed", action="store_true",
+                   help="Texturen einbetten, ohne zu fragen")
     p.set_defaults(func=cmd_convert)
+
+    p = sub.add_parser("merge-ytyp", help="Mehrere .ytyp zu einer zusammenfassen")
+    p.add_argument("source", help="Ordner mit .ytyp-Dateien (oder eine einzelne Datei)")
+    p.add_argument("--name", help="Name der Sammel-ytyp (Vorgabe: Ordnername)")
+    p.add_argument("--out", help="Zielordner (Vorgabe: neben den Quellen)")
+    p.add_argument("--blender", help="Pfad zur Blender-Binary (fuer binaere .ytyp)")
+    p.add_argument("--format", default="NATIVE", choices=["NATIVE", "CWXML"])
+    p.add_argument("--version", default="GEN8", choices=["GEN8", "GEN9"])
+    p.add_argument("--dry-run", action="store_true",
+                   help="nur zeigen, was zusammengefasst wuerde")
+    p.set_defaults(func=cmd_merge_ytyp)
 
     # materials braucht weder Konfiguration noch Quelldatei.
     p = sub.add_parser("materials", help="Kollisionsmaterialien nachschlagen")
