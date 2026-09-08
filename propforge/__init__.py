@@ -1,6 +1,6 @@
 """PropForge - automatisierte Prop-Pipeline fuer GTA V / FiveM.
 
-Kette: generiertes Mesh -> LOD-Kette -> Kollision -> DDS -> .ydr -> FiveM-Resource.
+Kette: GLB/Job -> DDS -> LODs/Kollision -> native Pruefung -> FiveM-Resource.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"

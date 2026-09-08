@@ -18,7 +18,9 @@ on:
 
 env:
   # Von Sollumz' eigener CI-Matrix abgedeckte LTS-Version.
-  BLENDER_VERSION: "4.5.11"
+  BLENDER_VERSION: "4.5.13"
+  SOLLUMZ_COMMIT: "bfcfa9d022af7b9ba3581f295d7bb34163a559bc"
+  BLENDER_DOWNLOADER_COMMIT: "5d8a776d5ffabbfde3ca66126ca86faac30a5f8d"
 
 jobs:
   unit:
@@ -67,7 +69,7 @@ jobs:
           set -euo pipefail
           # Sollumz-Fork: setzt einen eigenen User-Agent, weil blender.org den
           # Standard-Python-User-Agent blockt.
-          pip install git+https://github.com/Sollumz/blender-downloader.git
+          pip install git+https://github.com/Sollumz/blender-downloader.git@5d8a776d5ffabbfde3ca66126ca86faac30a5f8d
           mkdir -p _blender
           blender-downloader "$BLENDER_VERSION" -d _blender --extract \
             --remove-compressed --print-blender-executable --quiet \
@@ -84,7 +86,11 @@ jobs:
       - name: Sollumz installieren
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/Sollumz/Sollumz.git _sollumz
+          git init _sollumz
+          git -C _sollumz remote add origin https://github.com/Sollumz/Sollumz.git
+          git -C _sollumz fetch --depth 1 origin bfcfa9d022af7b9ba3581f295d7bb34163a559bc
+          git -C _sollumz checkout --detach FETCH_HEAD
+          python ci/prepare_sollumz.py _sollumz
           series=$(echo "$BLENDER_VERSION" | cut -d. -f1,2)
           addons="$HOME/.config/blender/$series/scripts/addons"
           mkdir -p "$addons"
@@ -117,6 +123,11 @@ jobs:
       # das es nicht gibt - oder die Preflight-Pruefung lehnt Gueltiges ab.
       - name: Kollisionsmaterialien gegen Sollumz abgleichen
         run: python ci/check_collision_materials.py _sollumz
+
+      - name: Gepinnte Toolchain und LOD-Schutz pruefen
+        run: |
+          "$BLENDER" --background --python-exit-code 1 --python ci/check_toolchain.py
+          "$BLENDER" --background --python-exit-code 1 --python ci/check_lod_guard.py
 
       - name: Umgebung pruefen
         run: |
@@ -151,8 +162,8 @@ jobs:
           set -o pipefail
           python -m propforge.cli verify ci/pipeline.ci.toml 2>&1 | tee -a ci-build.log
 
-      - name: Resource packen
-        run: python -m propforge.cli pack ci/pipeline.ci.toml
+      # CWXML is a diagnostic output. Only the Windows native job packages a
+      # playable FiveM resource; an empty stream/ folder is not a successful pack.
 
       # Schritt-Logs und Job-Zusammenfassung sind nur eingeloggt sichtbar.
       # Annotations rendert GitHub auch anonym - deshalb landet der Fehler dort.
@@ -197,9 +208,6 @@ jobs:
   pipeline-windows:
     name: Pipeline (Windows, NATIVE)
     runs-on: windows-latest
-    # Der NATIVE-Pfad braucht PyMateria und ist damit anfaelliger als CWXML.
-    # Er darf fehlschlagen, ohne den ganzen Lauf rot zu faerben.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
@@ -209,7 +217,7 @@ jobs:
 
       - name: Blender herunterladen
         run: |
-          pip install git+https://github.com/Sollumz/blender-downloader.git
+          pip install git+https://github.com/Sollumz/blender-downloader.git@5d8a776d5ffabbfde3ca66126ca86faac30a5f8d
           mkdir _blender
           blender-downloader $env:BLENDER_VERSION -d _blender --extract --remove-compressed --print-blender-executable --quiet | Out-File -FilePath _blender-executable-path.txt -Encoding ascii
           $blender = (Get-Content _blender-executable-path.txt).Trim()
@@ -218,7 +226,11 @@ jobs:
 
       - name: Sollumz installieren
         run: |
-          git clone --depth 1 https://github.com/Sollumz/Sollumz.git _sollumz
+          git init _sollumz
+          git -C _sollumz remote add origin https://github.com/Sollumz/Sollumz.git
+          git -C _sollumz fetch --depth 1 origin bfcfa9d022af7b9ba3581f295d7bb34163a559bc
+          git -C _sollumz checkout --detach FETCH_HEAD
+          python ci/prepare_sollumz.py _sollumz
           $series = $env:BLENDER_VERSION.Split('.')[0..1] -join '.'
           $addons = "$env:APPDATA\Blender Foundation\Blender\$series\scripts\addons"
           New-Item -ItemType Directory -Force -Path $addons | Out-Null
@@ -229,21 +241,31 @@ jobs:
         run: |
           & $env:BLENDER --background --python ci/install_deps.py
 
-      - name: texconv installieren
+      - name: Gepinnte Toolchain und LOD-Schutz pruefen
         run: |
-          $rel = Invoke-RestMethod https://api.github.com/repos/microsoft/DirectXTex/releases/latest
-          $asset = $rel.assets | Where-Object { $_.name -eq "texconv.exe" } | Select-Object -First 1
-          New-Item -ItemType Directory -Force -Path C:\tools | Out-Null
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile C:\tools\texconv.exe
-          echo "C:\tools" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & $env:BLENDER --background --python-exit-code 1 --python ci/check_toolchain.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:BLENDER --background --python-exit-code 1 --python ci/check_lod_guard.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+      - name: Geprueftes texconv verwenden
+        run: |
+          $expected = 'dcfdec10244e02cf5037fba089c55fb7e1326b1c8181742d77d15fa5cb5eef06'
+          if ((Get-FileHash texconv.exe -Algorithm SHA256).Hash.ToLower() -ne $expected) { throw 'texconv-Hash weicht ab' }
+          "$PWD" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
       - name: Pipeline durchlaufen
         run: |
           pip install -r requirements.txt
           python tools/make_testasset.py --out ci/assets --shape sphere  --name pf_testprop
           python tools/make_testasset.py --out ci/assets --shape torture --name pf_rig
           python -m propforge.cli doctor --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m propforge.cli run ci/pipeline.ci.native.toml --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Native Packs ueber mehrere Laeufe pruefen
+        run: |
+          python ci/pack_regression.py --blender $env:BLENDER 2>&1 | Tee-Object -FilePath ci-build.log -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       # Der NATIVE-Pfad schreibt Binaerdateien und ist damit der einzige, den
@@ -264,5 +286,6 @@ jobs:
           name: propforge-build-windows
           path: |
             ci/out/**
+            ci/out_pack/**
             ci-build.log
           if-no-files-found: warn

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "blender": "4.5.13",
+  "blender_local_build": "daeeeca98fb0",
+  "sollumz_commit": "bfcfa9d022af7b9ba3581f295d7bb34163a559bc",
+  "sollumz_manifest": "2.9.0-dev+bfcfa9d0",
+  "szio": "1.3.0.dev9",
+  "szio_sha256": "48e387e842003810ac185c3dffc1d6af5e856ad03fd3a9761dc556585c234bf2",
+  "pymateria": "0.2.0",
+  "pymateria_cp311_windows_sha256": "e476d7a96984861c72b15780b981d7f8be0bb75e449032e63910d24595e0ac1d",
+  "texconv_sha256": "dcfdec10244e02cf5037fba089c55fb7e1326b1c8181742d77d15fa5cb5eef06",
+  "blender_downloader_commit": "5d8a776d5ffabbfde3ca66126ca86faac30a5f8d"
+}

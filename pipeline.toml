@@ -19,8 +19,7 @@ export_version = "GEN8"
 
 [defaults]
 shader = "normal_spec.sps"
-texture_size = 1024
-max_tris = 10000
+profile = "standard"
 flip_normal_green = true
 
 [defaults.lods.ratios]
@@ -56,8 +55,6 @@ metallic = "assets/pallet_stack_metallic.png"
 [[prop]]
 name = "pf_oil_drum"
 mesh = "assets/oil_drum.glb"
-texture_size = 512
-max_tris = 4000
 
 [prop.textures]
 diffuse = "assets/oil_drum_albedo.png"

@@ -15,18 +15,19 @@ from szio.gta5 import AssetFormat, AssetTarget, AssetVersion, save_asset, try_lo
 import pymateria.gta5.gen8 as pmg8
 
 args = sys.argv[sys.argv.index("--") + 1:]
-build_dir, qa_dir = map(Path, args)
+build_dir, qa_dir = (Path(arg).resolve() for arg in args)
 qa_dir.mkdir(parents=True, exist_ok=True)
 report = {"method": "szio/PyMateria native readback to diagnostic CWXML", "files": []}
 for path in sorted(build_dir.rglob("*")):
-    if path.suffix not in (".ydr", ".ytyp"):
+    if path.suffix not in (".ydr", ".ytyp", ".ytd"):
         continue
     raw_textures = []
     if path.suffix == ".ydr":
         # szio's DDS extraction intentionally pops the sub-4x4 mips from
         # its in-memory copy. Count the original native mips before that.
         raw = pmg8.Drawable.import_rsc(path).result
-        for texture in raw.shader_group.texture_dictionary.textures.values():
+        dictionary = raw.shader_group.texture_dictionary
+        for texture in (dictionary.textures.values() if dictionary else ()):
             raw_textures.append({
                 "name": texture.name, "width": texture.width, "height": texture.height,
                 "format": str(texture.format), "mip_count": len(texture.mips),
@@ -64,6 +65,7 @@ for path in sorted(build_dir.rglob("*")):
         "target": str(target), "asset_type": str(asset.ASSET_TYPE),
         "embedded_dds": embedded,
         "direct_pymateria_textures": raw_textures,
+        "dictionary_textures": sorted(asset.textures) if path.suffix == ".ytd" else [],
     })
 if not report["files"]:
     raise RuntimeError("No native files found")

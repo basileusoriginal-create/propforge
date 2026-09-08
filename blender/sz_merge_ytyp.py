@@ -35,7 +35,7 @@ def load_map_types(path: Path):
     from szio import VPath
     from szio.gta5 import AssetType, try_load_asset
 
-    result = try_load_asset(VPath(path), return_target=True)
+    result = try_load_asset(VPath(path.resolve()), return_target=True)
     if result is None:
         raise RuntimeError(
             f"'{path.name}' liess sich nicht lesen. Bei einer binaeren .ytyp "
@@ -83,6 +83,7 @@ def _signature(archetype) -> tuple:
 
 
 def merge(paths: list[Path], name: str, out_dir: Path, fmt: str, version: str) -> dict:
+    out_dir = out_dir.resolve()
     from szio.gta5 import (
         AssetFormat,
         AssetMapTypes,

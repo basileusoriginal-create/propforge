@@ -74,6 +74,14 @@ class TestReading:
 
 
 class TestMerging:
+    def test_different_hd_texture_distance_is_a_conflict(self, tmp_path):
+        paths = [crate(tmp_path, "a", "pf_crate"), crate(tmp_path, "b", "pf_crate")]
+        for path, distance in zip(paths, (20, 80)):
+            path.write_text(path.read_text().replace(
+                '<flags value="32" />', f'<flags value="32" /><hdTextureDist value="{distance}" />'))
+        with pytest.raises(ytyp_merge.MergeError):
+            ytyp_merge.merge(paths, "pack", tmp_path / "pack.ytyp.xml")
+
     def test_two_files_become_one(self, tmp_path):
         paths = [crate(tmp_path, "a_ityp", "pf_crate"),
                  crate(tmp_path, "b_ityp", "pf_barrel")]

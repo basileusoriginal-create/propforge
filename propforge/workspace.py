@@ -235,7 +235,11 @@ class Workspace:
 
         side = sidecar_for(job.mesh)
         if side.is_file():
-            shutil.move(str(side), sidecar_for(target))
+            try:
+                shutil.move(str(side), sidecar_for(target))
+            except OSError:
+                shutil.move(str(target), job.mesh)
+                raise
         return target
 
     def render_config(self) -> str:

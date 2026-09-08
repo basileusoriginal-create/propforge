@@ -3,3 +3,5 @@ numpy>=1.24
 
 # nur fuer Tests
 pytest>=7.0
+# Fuehrt den erzeugten FiveM-Lua-Spawnhelper in Regressionstests aus.
+lupa==2.5

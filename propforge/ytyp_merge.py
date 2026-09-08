@@ -37,6 +37,7 @@ IDENTITY_FIELDS = (
     "lodDist",
     "flags",
     "specialAttribute",
+    "hdTextureDist",
     "textureDictionary",
     "physicsDictionary",
     "bbMin",

@@ -317,12 +317,7 @@ class TestManifest:
         assert props == ["pf_stuhl", "pf_tisch"]
         assert gone == []
 
-    def test_deleted_textures_drop_out(self, tmp_path):
-        """Die Liste ist ein Wegweiser, kein zweiter Wahrheitsstand.
-
-        Was nicht mehr auf der Platte liegt, kann nicht eingebettet werden -
-        also faellt es raus statt den Lauf zu kippen.
-        """
+    def test_deleted_textures_stop_before_replacing_dictionary(self, tmp_path):
         manifest = tmp_path / "pack.textures.json"
         manifest.write_text(json.dumps({
             "name": "pack", "props": ["pf_alt"],
@@ -331,9 +326,20 @@ class TestManifest:
         neu = tmp_path / "pf_neu_d.dds"
         neu.write_bytes(b"x")
 
-        known, _, gone = BUILD["merge_with_manifest"](manifest, [neu], ["pf_neu"])
-        assert sorted(known) == ["pf_neu_d"]
-        assert gone == ["pf_alt_d"]
+        with pytest.raises(RuntimeError, match="pf_alt_d"):
+            BUILD["merge_with_manifest"](manifest, [neu], ["pf_neu"])
+
+    def test_existing_dictionary_requires_manifest(self, tmp_path):
+        (tmp_path / "pack.ytd").write_bytes(b"previous dictionary")
+        with pytest.raises(RuntimeError, match="fehlt neben bestehender YTD"):
+            BUILD["merge_with_manifest"](tmp_path / "pack.textures.json", [], [])
+
+    @pytest.mark.parametrize("data", [{}, [], {"textures": [], "props": []}])
+    def test_invalid_manifest_schema_is_rejected(self, tmp_path, data):
+        path = tmp_path / "pack.textures.json"
+        path.write_text(json.dumps(data))
+        with pytest.raises(RuntimeError, match="ungueltige Begleitliste"):
+            BUILD["merge_with_manifest"](path, [], [])
 
     def test_rebuilt_texture_wins_over_the_listed_path(self, tmp_path):
         """Neu gebaut heisst neu: der aktuelle Lauf ueberschreibt den Eintrag."""
@@ -397,6 +403,31 @@ def convert(tmp_path, **overrides):
 
 
 class TestAsking:
+    @pytest.mark.parametrize("textures", [{}, {"diffuse": "existing.png"}])
+    @pytest.mark.parametrize("flags,old,expected", [
+        ({"ytd": "Pack Props"}, None, "pack_props"),
+        ({"embed": True}, "old_pack", None),
+    ])
+    def test_flags_override_existing_handoffs(self, tmp_path, monkeypatch, textures, flags, old, expected):
+        w = prepare_inbox(tmp_path, monkeypatch)
+        mesh = w.inbox / "pf_prop0.glb"
+        workspace.Job(name=mesh.stem, mesh=mesh, profile="detailed", center="none",
+                      ytd=old, textures=textures).write()
+        monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))
+        def never(*a, **k):
+            raise AssertionError("Existing handoff must not prompt")
+        for name in ("_ask_profile", "_ask_material", "_ask_ytd"):
+            monkeypatch.setattr(cli, name, never)
+        def check(args):
+            assert args.config.props[0].ytd == expected
+            return 0
+        monkeypatch.setattr(cli, "cmd_build", check)
+        assert convert(tmp_path, no_ask=False, **flags) == 0
+        saved = json.loads(workspace.sidecar_for(w.done / mesh.name).read_text())
+        assert saved.get("ytd") == expected
+        assert saved["profile"] == "detailed"
+        assert saved["center"] == "none"
+
     def test_answer_lands_in_the_sidecar(self, tmp_path, monkeypatch):
         w = prepare_inbox(tmp_path, monkeypatch)
         monkeypatch.setattr(cli.sys, "stdin", SimpleNamespace(isatty=lambda: True))

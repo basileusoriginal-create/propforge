@@ -19,7 +19,8 @@ Lokale Routine ueber Ordner (kein Bearbeiten von Konfigurationsdateien):
 
 Fuer ein Pack:
 
-    propforge convert --ytd pack_props    Texturen in eine gemeinsame .ytd
+    propforge convert --pack pack_props   vollstaendige Ressource mit YTD/YTYP
+    propforge verify-native              native Dateien erneut pruefen
     propforge merge-ytyp <ordner>         alle .ytyp zu einer zusammenfassen
 """
 
@@ -31,6 +32,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from dataclasses import replace
 
 from . import collision_materials as pf_materials
 from . import doctor as pf_doctor
@@ -44,6 +46,7 @@ from . import ytyp_merge as pf_ytyp_merge
 from . import config as pf_config
 from .config import PipelineConfig
 from .validate import Level
+from .transaction import DirectoryTransaction
 
 
 def _load(path_or_config) -> PipelineConfig:
@@ -56,6 +59,15 @@ def _load(path_or_config) -> PipelineConfig:
     if isinstance(path_or_config, PipelineConfig):
         return path_or_config
     return PipelineConfig.load(path_or_config)
+
+
+def _check_output_layout(config: PipelineConfig) -> None:
+    target = config.workdir.resolve()
+    repository = Path(__file__).resolve().parents[1]
+    inputs = [Path(p.mesh).resolve() for p in config.props]
+    inputs += [Path(value).resolve() for p in config.props for value in p.textures.present().values()]
+    if target == repository or target in repository.parents or any(target == p or target in p.parents for p in inputs):
+        raise ValueError("Ausgabeordner muss getrennt von Quellassets und Repository liegen.")
 
 
 def _report(findings: list[validate.Finding]) -> int:
@@ -199,13 +211,16 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 def cmd_pack(args: argparse.Namespace) -> int:
     config = _load(args.config)
+    if config.export_format != "NATIVE":
+        print("CWXML ist eine Diagnose-/Zwischenausgabe. Eine spielbare Ressource erfordert einen nativen Build.", file=sys.stderr)
+        return 2
     report = packaging.build_resource(
         build_dir=config.workdir / "build",
         out_root=config.workdir / "resources",
         resource_name=config.resource_name,
         author=config.author,
         spawn_helper=config.spawn_helper,
-        prop_names=[p.name for p in config.props],
+        prop_names=None,
     )
     print(report.summary())
     print(f"\nResource: {report.root}")
@@ -218,6 +233,10 @@ def cmd_pack(args: argparse.Namespace) -> int:
 def cmd_verify(args: argparse.Namespace) -> int:
     config = _load(args.config)
     build_dir = config.workdir / "build"
+
+    if config.export_format == "NATIVE":
+        return cmd_verify_native(argparse.Namespace(source=str(build_dir),
+            out=str(config.workdir / "native_check"), blender=args.blender))
 
     drawables = pf_inspect.find_drawables(build_dir)
     if drawables:
@@ -235,6 +254,31 @@ def cmd_verify(args: argparse.Namespace) -> int:
 
     print("--- Abgleich mit der Konfiguration ---")
     return _report(pf_verify.verify(config, build_dir))
+
+
+def cmd_verify_native(args: argparse.Namespace) -> int:
+    workspace = pf_workspace.Workspace.load(getattr(args, "root", "."))
+    blender = args.blender or workspace.blender or shutil.which("blender") or shutil.which("blender.exe")
+    if not blender:
+        print("Blender fuer native Ruecklesung fehlt.", file=sys.stderr)
+        return 2
+    source = Path(args.source).resolve() if args.source else workspace.out / "build"
+    out = Path(args.out).resolve() if args.out else source.parent / "native_check"
+    out.mkdir(parents=True, exist_ok=True)
+    result_file = out / "native_result.json"
+    result_file.unlink(missing_ok=True)
+    script = Path(__file__).resolve().parents[1] / "blender/sz_verify_native.py"
+    code = subprocess.run([blender, "--background", "--python", str(script), "--",
+                           "--build", str(source), "--out", str(out)]).returncode
+    if not result_file.is_file():
+        print("Native Pruefung hat keinen Ergebnisbericht geliefert.", file=sys.stderr)
+        return code or 1
+    result = json.loads(result_file.read_text(encoding="utf-8"))
+    if code or result.get("status") != "passed":
+        print(f"Native Pruefung fehlgeschlagen: {result.get('error', code)}", file=sys.stderr)
+        return code or 1
+    print(f"Native Ausgabe geprueft: {len(result['props'])} Props -> {result_file}")
+    return 0
 
 
 def choose_collision_material(name: str, source: Path, preset: str | None) -> str:
@@ -494,7 +538,12 @@ def cmd_merge_ytyp(args: argparse.Namespace) -> int:
         print(f"  + {archetype}")
     files = ", ".join(f"{f['file']} ({f['bytes']} Bytes)" for f in report.get("files", []))
     print(f"\n{len(report.get('archetypes', []))} Archetypen -> {files}")
-    _print_manifest_hint(name, len(paths))
+    if not getattr(args, "quiet", False):
+        _print_manifest_hint(name, len(paths))
+    if returncode or not report.get("archetypes") or not report.get("files"):
+        return returncode or 1
+    if not all((out_dir / f["file"]).is_file() for f in report["files"]):
+        return 1
     return 0
 
 
@@ -612,8 +661,24 @@ def _guess_profile(mesh: Path) -> str:
 def cmd_convert(args: argparse.Namespace) -> int:
     """Wandelt alles im Eingang in GTA-Dateien um."""
     workspace = pf_workspace.Workspace.load(args.root)
-    workspace.ensure()
+    try:
+        _check_output_layout(workspace.to_config(workspace.jobs(), export_format=args.format))
+        if any(workspace.out == p or workspace.out in p.parents
+               for p in (workspace.inbox, workspace.done)):
+            raise ValueError("Ausgabeordner muss getrennt von Eingang und Archiv liegen.")
+        # Do not ensure()/recreate a missing output before journal recovery:
+        # that empty directory would hide the previous complete publication.
+        # Hold the same lock while reading pack state and rewriting sidecars.
+        with DirectoryTransaction(workspace.out, seed=True, relocate=True) as transaction:
+            workspace.inbox.mkdir(parents=True, exist_ok=True)
+            workspace.done.mkdir(parents=True, exist_ok=True)
+            return _convert_locked(args, workspace, transaction)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"Konvertierung abgebrochen: {exc}", file=sys.stderr)
+        return 1
 
+
+def _convert_locked(args, workspace, transaction) -> int:
     jobs = workspace.jobs()
     if not jobs:
         print(f"Der Eingang ist leer: {workspace.inbox}\n"
@@ -636,6 +701,23 @@ def cmd_convert(args: argparse.Namespace) -> int:
     # pack_name', fertig - statt zehnmal dieselbe Antwort zu tippen.
     forced_ytd: str | None = pf_config.normalize_ytd_name(getattr(args, "ytd", None))
     forced_embed = bool(getattr(args, "embed", False))
+    previous_pack = workspace.out / "pack_result.json"
+    remembered_pack = json.loads(previous_pack.read_text(encoding="utf-8")).get("resource") if previous_pack.is_file() else None
+    pack_name = pf_config.normalize_ytd_name(getattr(args, "pack", None) or remembered_pack)
+    if remembered_pack and pack_name != remembered_pack:
+        print("Dieser Ausgabeordner gehoert zu einem anderen Pack; bitte einen eigenen Arbeitsordner verwenden.", file=sys.stderr)
+        return 2
+    if pack_name:
+        import re
+        if not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", pack_name):
+            print("Pack-Name: Kleinbuchstaben, Ziffern, Unterstriche, maximal 64 Zeichen.", file=sys.stderr)
+            return 2
+        if args.format != "NATIVE":
+            print("--pack erfordert den nativen GEN8-Ausgabeweg.", file=sys.stderr)
+            return 2
+        workspace.resource_name = pack_name
+        if not forced_ytd and not forced_embed:
+            forced_ytd = pack_name
     if forced_ytd and forced_embed:
         print("--ytd und --embed schliessen sich aus.", file=sys.stderr)
         return 2
@@ -646,6 +728,9 @@ def cmd_convert(args: argparse.Namespace) -> int:
     last_ytd: str | None = None
     for job in jobs:
         if pf_workspace.sidecar_for(job.mesh).is_file():
+            if forced_ytd or forced_embed:
+                job.ytd = forced_ytd
+                job.write()
             continue
 
         guess = _guess_profile(job.mesh)
@@ -697,15 +782,26 @@ def cmd_convert(args: argparse.Namespace) -> int:
 
     config = _load(workspace.to_config(prepared, export_format=args.format))
 
-    stage_args = argparse.Namespace(config=config, blender=blender, texconv=args.texconv)
-    for step in (cmd_validate, cmd_textures, cmd_build, cmd_verify, cmd_pack):
+    _check_output_layout(config)
+    staged_config = replace(config, workdir=transaction.stage)
+    stage_args = argparse.Namespace(config=staged_config, blender=blender, texconv=args.texconv)
+    for step in (cmd_validate, cmd_textures, cmd_build, cmd_verify):
         code = step(stage_args)
         if code:
-            print("\nAbgebrochen - die Assets bleiben im Eingang liegen.", file=sys.stderr)
+            _save_failed_run(transaction.stage, config.workdir)
+            print("\nAbgebrochen - vorige Ausgabe bleibt erhalten, Assets bleiben im Eingang.", file=sys.stderr)
             return code
-
-    # Erst jetzt archivieren: was nicht gebaut wurde, soll beim naechsten
-    # Lauf wieder drankommen und nicht im Archiv verschwinden.
+    if pack_name:
+        from .pack_flow import assemble
+        assemble(staged_config, blender, cmd_merge_ytyp)
+    elif config.export_format == "NATIVE":
+        code = cmd_pack(stage_args)
+        if code:
+            return code
+    else:
+        print("CWXML-Ausgabe geprueft. Keine unmittelbar spielbare Ressource erzeugt.")
+    transaction.publish()
+    # Archive only AFTER all output has been verified and published.
     for job in prepared:
         workspace.archive(job)
 
@@ -854,16 +950,42 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 
 
 def cmd_run(args: argparse.Namespace) -> int:
-    for step in (cmd_validate, cmd_textures, cmd_build, cmd_verify, cmd_pack):
-        code = step(args)
-        if code:
-            return code
+    config = _load(args.config)
+    _check_output_layout(config)
+    with DirectoryTransaction(config.workdir, seed=True, relocate=True) as transaction:
+        staged = argparse.Namespace(**vars(args))
+        staged.config = replace(config, workdir=transaction.stage)
+        steps = (cmd_validate, cmd_textures, cmd_build, cmd_verify)
+        if config.export_format == "NATIVE":
+            steps += (cmd_pack,)
+        for step in steps:
+            code = step(staged)
+            if code:
+                _save_failed_run(transaction.stage, config.workdir)
+                return code
+        transaction.publish()
+        if config.export_format != "NATIVE":
+            print("CWXML-Ausgabe geprueft. Keine unmittelbar spielbare Ressource erzeugt.")
     return 0
+
+
+def _save_failed_run(stage: Path, target: Path) -> None:
+    """Retain structured errors outside the unchanged published output."""
+    from datetime import datetime, timezone
+    folder = target.parent / (target.name + "_failed") / datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    for relative in ("build_result.json", "native_check/native_result.json", "jobs.json"):
+        source = stage / relative
+        if source.is_file():
+            destination = folder / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="propforge", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
+    from . import __version__
+    parser.add_argument("--version", action="version", version="PropForge " + __version__)
     sub = parser.add_subparsers(dest="command", required=True)
 
     for name, fn, helptext in [
@@ -930,6 +1052,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(func=cmd_batch)
 
     p = sub.add_parser("convert", help="Alles im Eingang zu GTA-Dateien machen")
+    p.add_argument("--pack", metavar="NAME", help="Vollstaendiges Pack mit Sammel-YTYP, geteilter YTD und nativer Pruefung")
     p.add_argument("--root", default=".", help="Wurzel des Arbeitsordners")
     p.add_argument("--blender", help="Pfad zur Blender-Binary")
     p.add_argument("--texconv", help="Pfad zu texconv.exe")
@@ -942,6 +1065,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--embed", action="store_true",
                    help="Texturen einbetten, ohne zu fragen")
     p.set_defaults(func=cmd_convert)
+
+    p = sub.add_parser("verify-native", help="GEN8-Binaerausgabe samt DDS-Mips gegen Build-Belege pruefen")
+    p.add_argument("source", nargs="?", help="Build-Ordner; sonst Ausgabe des Arbeitsordners")
+    p.add_argument("--root", default=".", help="Arbeitsordner mit gespeicherten Werkzeugpfaden")
+    p.add_argument("--out", help="Separater Diagnoseordner")
+    p.add_argument("--blender", help="Blender mit aktiviertem Sollumz und PyMateria")
+    p.set_defaults(func=cmd_verify_native)
 
     p = sub.add_parser("merge-ytyp", help="Mehrere .ytyp zu einer zusammenfassen")
     p.add_argument("source", help="Ordner mit .ytyp-Dateien (oder eine einzelne Datei)")

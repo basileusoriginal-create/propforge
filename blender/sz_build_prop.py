@@ -384,7 +384,7 @@ def check_mesh_attributes(mesh: bpy.types.Mesh, label: str = "") -> None:
 
 # --- LODs -------------------------------------------------------------------
 
-def _bake_decimate(obj: bpy.types.Object, ratio: float, name: str) -> bpy.types.Mesh:
+def _bake_decimate(obj: bpy.types.Object, ratio: float, name: str, protected=()) -> bpy.types.Mesh:
     """Backt einen Decimate-Modifier in einen neuen Mesh-Datenblock.
 
     Bewusst ohne Operatoren: `modifier_apply` braucht die richtige Selektion,
@@ -394,6 +394,7 @@ def _bake_decimate(obj: bpy.types.Object, ratio: float, name: str) -> bpy.types.
     """
     tmp = obj.copy()
     tmp.data = obj.data.copy()
+    temporary_mesh = tmp.data
     bpy.context.collection.objects.link(tmp)
 
     try:
@@ -402,6 +403,14 @@ def _bake_decimate(obj: bpy.types.Object, ratio: float, name: str) -> bpy.types.
         mod.ratio = ratio
         # Symmetrie aus: sie kann bei asymmetrischen Props die Silhouette kippen.
         mod.use_symmetry = False
+        if protected:
+            group = tmp.vertex_groups.new(name="pf_lod_protection")
+            group.add(list(protected), 1.0, "REPLACE")
+            mod.vertex_group = group.name
+            mod.vertex_group_factor = 1000.0
+            # Blender excludes edges with zero effective weight from collapse.
+            # Protected vertices are 1 in our group, so invert to effective 0.
+            mod.invert_vertex_group = True
 
         depsgraph = bpy.context.evaluated_depsgraph_get()
         evaluated = tmp.evaluated_get(depsgraph)
@@ -413,17 +422,58 @@ def _bake_decimate(obj: bpy.types.Object, ratio: float, name: str) -> bpy.types.
         # Hilfsobjekt immer entfernen, auch wenn die Auswertung scheitert -
         # sonst landet es in der exportierten Hierarchie.
         bpy.data.objects.remove(tmp, do_unlink=True)
+        if temporary_mesh.users == 0:
+            bpy.data.meshes.remove(temporary_mesh)
 
     return mesh
 
 
 def decimate_to_ratio(obj: bpy.types.Object, ratio: float, name: str) -> bpy.types.Mesh:
-    """Erzeugt eine reduzierte Kopie des Meshes als eigenen Datenblock."""
+    """Reduce conservatively; never publish collapsed feet or zero normals."""
+    from propforge.lod_guard import protected_vertices
+    from mathutils.kdtree import KDTree
+    source = obj.data
+    source.calc_loop_triangles()
+    protected = protected_vertices([tuple(v.co) for v in source.vertices],
+                                   [tuple(e.vertices) for e in source.edges],
+                                   [tuple(t.vertices) for t in source.loop_triangles])
+    if len(source.loop_triangles) <= 64:
+        ratio = 1.0
     if ratio >= 1.0:
-        mesh = obj.data.copy()
+        mesh = source.copy()
         mesh.name = name
+        mesh["pf_lod_requested_ratio"] = ratio
+        mesh["pf_lod_used_ratio"] = 1.0
         return mesh
-    return _bake_decimate(obj, ratio, name)
+    requested = ratio
+    reason = ""
+    while ratio < 1.0:
+        mesh = _bake_decimate(obj, ratio, name, protected)
+        mesh.calc_loop_triangles()
+        valid = bool(mesh.loop_triangles) and all(t.area > 1e-12 for t in mesh.loop_triangles)
+        valid = valid and all(n.vector.length > 1e-8 for n in mesh.corner_normals)
+        if valid:
+            tree = KDTree(len(mesh.vertices))
+            for vertex in mesh.vertices:
+                tree.insert(vertex.co, vertex.index)
+            tree.balance()
+            valid = all(tree.find(source.vertices[i].co)[2] <= 0.0001 for i in protected)
+            reason = "geschuetzte Stand-/Strebendaten veraendert" if not valid else ""
+        else:
+            reason = "degenerierte Flaeche oder Null-Normale"
+        if valid:
+            mesh["pf_lod_requested_ratio"] = requested
+            mesh["pf_lod_used_ratio"] = ratio
+            return mesh
+        bpy.data.meshes.remove(mesh)
+        ratio = min(1.0, max(ratio + 0.1, ratio * 1.5))
+    log(f"  {name}: {reason}; vollstaendige Geometrie bleibt in dieser LOD erhalten.")
+    mesh = source.copy()
+    mesh.name = name
+    mesh["pf_lod_requested_ratio"] = requested
+    mesh["pf_lod_used_ratio"] = 1.0
+    mesh["pf_lod_fallback"] = reason
+    return mesh
 
 
 def clamp_to_budget(obj: bpy.types.Object, max_tris: int) -> None:
@@ -461,7 +511,8 @@ def texture_files(job: dict) -> list[Path]:
     Shader nennt aber die .ytd nicht enthaelt, faellt erst im Spiel auf.
     """
     texture_dir = Path(job["texture_dir"])
-    files = [texture_dir / f"{job['name']}{suffix}.dds" for suffix in SAMPLERS]
+    files = [Path(job["texture_files"][suffix]) if job.get("texture_files") else
+             texture_dir / f"{job['name']}{suffix}.dds" for suffix in SAMPLERS]
     return [p for p in files if p.is_file()]
 
 
@@ -481,7 +532,8 @@ def build_material(job: dict, mesh_obj: bpy.types.Object) -> bpy.types.Material:
 
     attached = 0
     for suffix, sampler in mapping.items():
-        dds = texture_dir / f"{job['name']}{suffix}.dds"
+        dds = (Path(job["texture_files"][suffix]) if job.get("texture_files") else
+               texture_dir / f"{job['name']}{suffix}.dds")
         if not dds.is_file():
             continue
         node = mat.node_tree.nodes.get(sampler)
@@ -921,13 +973,15 @@ def merge_with_manifest(
     mit nur den fuenf neuen darin - und die fuenf von gestern waeren im Spiel
     weiss. Nichts haette gefehlt, keine Datei, keine Meldung.
 
-    Deshalb liegt neben der .ytd eine Liste dessen, was drinsteckt. Sie ist
-    kein zweiter Wahrheitsstand: gebaut wird aus den DDS auf der Platte, und
-    was dort nicht mehr liegt, faellt hier raus. Die Liste sagt nur, wo noch
-    zu suchen ist.
+    Die Begleitliste und die bisherigen DDS werden zum Erweitern gebraucht.
+    Fehlende Quellen duerfen bestehende Props nicht still enttexturieren.
     """
     known: dict[str, Path] = {}
     gone: list[str] = []
+    dictionary_name = path.name.removesuffix(MANIFEST_SUFFIX)
+    if not path.is_file() and any((path.parent / (dictionary_name + suffix)).is_file()
+                                  for suffix in (".ytd", ".ytd.xml")):
+        raise RuntimeError(f"{path.name} fehlt neben bestehender YTD; alle Props in einem neuen Arbeitsordner neu bauen.")
     if path.is_file():
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
@@ -938,8 +992,16 @@ def merge_with_manifest(
                 "gehoeren - ohne sie waeren die Props dieser Laeufe im Spiel "
                 "weiss. Entweder reparieren oder alle Props neu bauen."
             ) from exc
+        if (not isinstance(data, dict) or not isinstance(data.get("textures"), dict)
+                or not data["textures"] or not isinstance(data.get("props"), list)
+                or not all(isinstance(p, str) for p in data["props"])
+                or not all(isinstance(k, str) and isinstance(v, str)
+                           for k, v in data["textures"].items())):
+            raise RuntimeError(f"{path.name}: ungueltige Begleitliste; bisherige YTD bleibt erhalten.")
         for texture_name, raw in (data.get("textures") or {}).items():
             candidate = Path(raw)
+            if not candidate.is_absolute():
+                candidate = (path.parent / candidate).resolve()
             if candidate.is_file():
                 known[texture_name] = candidate
             else:
@@ -949,7 +1011,10 @@ def merge_with_manifest(
     for dds in dds_files:
         known[dds.stem.lower()] = dds
 
-    return known, sorted(props), gone
+    gone = sorted(set(gone) - set(known))
+    if gone:
+        raise RuntimeError(f"{path.name}: DDS aus frueherem Lauf fehlen: {', '.join(gone)}. Bisherige YTD bleibt erhalten.")
+    return known, sorted(props), []
 
 
 def build_texture_dictionary(
@@ -958,6 +1023,17 @@ def build_texture_dictionary(
     out_dir: Path,
     fmt: str,
     version: str,
+    props: list[str] | None = None,
+) -> dict:
+    from propforge.transaction import DirectoryTransaction
+    with DirectoryTransaction(out_dir, seed=True, relocate=True) as transaction:
+        result = _build_texture_dictionary(name, dds_files, transaction.stage, fmt, version, props)
+        transaction.publish()
+    return result
+
+
+def _build_texture_dictionary(
+    name: str, dds_files: list[Path], out_dir: Path, fmt: str, version: str,
     props: list[str] | None = None,
 ) -> dict:
     """Baut eine .ytd aus fertigen DDS-Dateien.
@@ -1003,35 +1079,38 @@ def build_texture_dictionary(
     settings["export_ytds_include"] = "SELECTED"
     settings["limit_to_selected"] = True
 
-    result = bpy.ops.sollumz.export_assets(
-        directory=str(out_dir),
-        direct_export=True,
-        use_custom_settings=True,
-        target_formats={fmt},
-        target_versions={version},
-        **settings,
-    )
-    if result != {"FINISHED"}:
-        raise RuntimeError(f"YTD-Export lieferte {result} statt FINISHED.")
-
-    # Und wieder gegen die Platte pruefen statt gegen den Rueckgabewert.
-    written = [p for p in _written(out_dir, name, ".ytd")
-               if not p.name.endswith(MANIFEST_SUFFIX)]
-    if not written:
-        existing = [p.name for p in out_dir.iterdir() if p.is_file()] or ["(nichts)"]
-        raise RuntimeError(
-            f"Der Export hat keine .ytd fuer '{name}' erzeugt. Im "
-            f"Zielverzeichnis liegt: {', '.join(existing)}. Alle Props, die "
-            "darauf verweisen, waeren im Spiel weiss."
+    # Erst eine neue Ausgabe pruefen. Bei Export-/Lesefehlern bleibt die
+    # bisherige Dictionary-Datei nutzbar; alte Dateien koennen keinen Erfolg vortaeuschen.
+    from tempfile import TemporaryDirectory
+    with TemporaryDirectory(prefix=".ytd-stage-", dir=out_dir) as staging:
+        result = bpy.ops.sollumz.export_assets(
+            directory=staging, direct_export=True, use_custom_settings=True,
+            target_formats={fmt}, target_versions={version}, **settings,
         )
+        if result != {"FINISHED"}:
+            raise RuntimeError(f"YTD-Export lieferte {result} statt FINISHED.")
+        suffix = ".ytd" if fmt == "NATIVE" else ".ytd.xml"
+        candidate = Path(staging) / (name + suffix)
+        if not candidate.is_file():
+            raise RuntimeError(f"Der Export hat keine {candidate.name} erzeugt.")
+        check_texture_dictionary(candidate, sorted(known))
+        if fmt != "NATIVE":
+            # CWXML stores DDS beside the XML; retain that separate output path.
+            import shutil
+            for item in Path(staging).iterdir():
+                if item.is_dir():
+                    shutil.copytree(item, out_dir / item.name, dirs_exist_ok=True)
+        target = out_dir / candidate.name
+        candidate.replace(target)
+        written = [target]
 
-    check_texture_dictionary(written[0], sorted(known))
-
+    import os
     manifest.write_text(
         json.dumps({
+            "version": 2,
             "name": name,
             "props": props,
-            "textures": {k: str(v) for k, v in sorted(known.items())},
+            "textures": {k: os.path.relpath(v, out_dir) for k, v in sorted(known.items())},
         }, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
@@ -1058,10 +1137,8 @@ def check_texture_dictionary(path: Path, expected: list[str]) -> None:
     try:
         from szio import VPath
         from szio.gta5 import try_load_asset
-    except ImportError:
-        log(f"  Hinweis: {path.name} kann nicht gegengelesen werden (szio "
-            "fehlt) - der Inhalt bleibt ungeprueft.")
-        return
+    except ImportError as exc:
+        raise RuntimeError(f"{path.name}: szio fehlt fuer die erforderliche Ruecklesung.") from exc
 
     result = try_load_asset(VPath(path), return_target=True)
     if result is None:
@@ -1269,9 +1346,24 @@ def extract_lod_geometry(
 # --- Ablauf -----------------------------------------------------------------
 
 def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> dict:
+    from propforge.transaction import DirectoryTransaction
+    output = job["output_dir"]
+    try:
+        with DirectoryTransaction(Path(output), seed=False, relocate=True) as transaction:
+            job["output_dir"] = str(transaction.stage)
+            result = _build(job, fmt, version, render_dir)
+            transaction.publish()
+            return result
+    finally:
+        job["output_dir"] = output
+
+
+def _build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> dict:
     name = job["name"]
     log(f"=== {name} ===")
 
+    from propforge.texture_pool import prepare_job
+    job["texture_files"] = prepare_job(job)
     reset_scene()
 
     source = import_mesh(Path(job["mesh"]), job.get("source_up", "y"))
@@ -1356,16 +1448,58 @@ def build(job: dict, fmt: str, version: str, render_dir: str | None = None) -> d
     files = export(drawable, out_dir, fmt, version, ytyp_name)
     log(f"Export nach {out_dir}")
 
+    # Standhoehe aus der sichtbaren LOD0 im Drawable-Koordinatensystem.
+    # GetModelDimensions im Spiel enthaelt dagegen die Kollisions-Randzugabe.
+    # Ein bewusst gewaehlter Ursprung bleibt erhalten, auch bei center=none/all.
+    placement_bounds = None
+    if fmt == "NATIVE":
+        from propforge import placement
+        to_drawable = drawable.matrix_world.inverted() @ model.matrix_world
+        points = [to_drawable @ v.co for v in lod_meshes["high"].vertices]
+        minimum = [min(p[i] for p in points) for i in range(3)]
+        maximum = [max(p[i] for p in points) for i in range(3)]
+        placement.write(out_dir / f"{name}.ydr", minimum, maximum)
+        placement_bounds = {"min": minimum, "max": maximum}
+
     previews: list[dict] = []
     if render_dir is not None:
         previews = extract_lod_geometry(name, lod_meshes, Path(render_dir) / name)
+
+    from propforge.lod_guard import finite_bounds
+    import hashlib
+    import importlib.metadata
+    import importlib
+    addon = importlib.import_module(SOLLUMZ_MODULE)
+    manifest_path = Path(addon.__file__).parent / "blender_manifest.toml"
+    import tomllib
+    addon_version = tomllib.loads(manifest_path.read_text()).get("version") if manifest_path.exists() else None
+    lod_report = {}
+    for key, mesh in lod_meshes.items():
+        mesh.calc_loop_triangles()
+        lod_report[key] = {"triangles": len(mesh.loop_triangles),
+                           "bounds": finite_bounds([tuple(v.co) for v in mesh.vertices]),
+                           "requested_ratio": float(job["lod_ratios"][key]),
+                           "used_ratio": mesh.get("pf_lod_used_ratio", 1.0),
+                           "fallback": mesh.get("pf_lod_fallback", "")}
+    receipt = {"version": 1, "job": job, "lods": lod_report,
+               "format": fmt, "game_version": version,
+               "toolchain": {"blender": bpy.app.version_string,
+                             "blender_hash": bpy.app.build_hash.decode(),
+                             "sollumz_module": SOLLUMZ_MODULE, "sollumz": addon_version,
+                             "szio": importlib.metadata.version("szio"),
+                             "pymateria": importlib.metadata.version("pymateria") if fmt == "NATIVE" else None},
+               "files": {f["file"]: hashlib.sha256((out_dir/f["file"]).read_bytes()).hexdigest() for f in files}}
+    (out_dir / f"{name}.build.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
 
     return {
         "name": name,
         "previews": previews,
         "dimensions": dimensions,
+        "placement_bounds": placement_bounds,
         "ytyp": ytyp_name,
         "files": files,
+        "lods": lod_report,
+        "toolchain": receipt["toolchain"],
     }
 
 

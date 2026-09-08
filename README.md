@@ -1,408 +1,133 @@
 # PropForge
 
-Automatisierte Prop-Pipeline für GTA V / FiveM.
+PropForge **0.2.0** konvertiert geprüfte GLBs zu nativen GTA-V-/FiveM-Props und
+vollständigen Packs. Ein Pack kann mehrere Props in einer YTYP registrieren und
+identische DDS-Inhalte in einer gemeinsamen YTD wiederverwenden.
 
-```
-generiertes Mesh  ->  Cleanup  ->  LOD-Kette  ->  Kollision
-                                                     |
-PBR-Texturen      ->  Specular  ->  DDS  -------------+--> .ydr --> FiveM-Resource
-```
-
-Die These dahinter: Assets *erzeugen* ist heute das kleinere Problem. Der Engpass
-liegt am RAGE-Format-Ende der Kette — LODs, Kollision, Texturkonventionen,
-Shader-Zuweisung, Manifest. Das ist repetitive Regelarbeit und damit
-automatisierbar. Genau die deckt dieses Repo ab.
-
-## Was automatisiert ist
-
-| Stufe | Was passiert | Läuft wo |
-|---|---|---|
-| `doctor` | prüft Blender, Sollumz, szio, PyMateria, texconv | überall |
-| `validate` | Namen, Texturmaße, LOD-Konsistenz, Shader-Sampler-Abgleich | überall |
-| `textures` | Zweierpotenz-Resize, Specular aus Roughness/Metallic, OpenGL→DirectX-Normalmap, DDS via texconv | überall (DDS: Windows) |
-| `jobs` | Prop-Definitionen zu Job-JSON für Blender | überall |
-| `build` | Blender headless: Import, Cleanup, LOD-Kette, Material, Drawable, Kollision, Archetyp (.ytyp), Export | Linux (CWXML) / Windows (NATIVE) |
-| `verify` | liest den Export zurück und gleicht ihn gegen die Konfiguration ab | überall |
-| `pack` | stream/-Ordner, fxmanifest.lua, Spawn-Helfer für den Test im Spiel | überall |
-
-`propforge run` führt alles nacheinander aus. Es gibt keinen manuellen Schritt
-dazwischen.
-
-## Verifikation ohne GTA V
-
-Ein CodeWalker-`.ydr.xml` ist reiner Text und enthält alles, was die Pipeline
-versprochen hat: LOD-Stufen, Sichtweiten, Shader, eingebettete Texturen,
-Kollision. Dasselbe gilt für die `.ytyp.xml` mit der Archetyp-Definition.
-`propforge verify` parst beides zurück und meldet, wenn es von der
-Konfiguration abweicht — eine fehlende LOD-Stufe, ein nicht belegter Sampler,
-eine Sichtweite, die nicht durchgereicht wurde, eine Textur, die keine
-Zweierpotenz ist, ein Archetyp, der auf eine andere `.ydr` zeigt als die
-gebaute.
-
-Das ersetzt keinen Blick ins Spiel. Es fängt aber die gesamte Klasse von
-Fehlern ab, bei denen der Export stillschweigend etwas wegläßt — und genau die
-sind sonst am teuersten, weil sie erst im Spiel auffallen.
-
-## CI
-
-`.github/workflows/build.yml` installiert Blender und Sollumz, erzeugt ein
-synthetisches Testasset (kein Binärblob im Repo), fährt die komplette Kette
-und prüft das Ergebnis maschinell. Der Linux-Job nutzt CWXML und läuft ohne
-PyMateria; der Windows-Job deckt zusätzlich den NATIVE-Export ab.
-
-Damit ist die Pipeline bei jedem Push verifiziert, ohne dass jemand etwas
-anklicken muss.
-
-Die Blender-Installation folgt dem Muster aus Sollumz' eigener CI —
-`blender-downloader` aus dem **Sollumz-Fork**, weil blender.org den
-Standard-Python-User-Agent blockt. Die Abhängigkeiten installiert Sollumz'
-eigene `install_dependencies()` mit gepinnter Version und Hash-Prüfung.
-
-### Loslegen
-
-Das Repo enthält bereits einen Initial-Commit. Zum Starten:
-
-```bash
-git remote add origin git@github.com:<dein-user>/propforge.git
-git push -u origin main
+```text
+GLB + Job → Eingang prüfen → Bilder/DDS → Blender/LODs/Kollision
+          → native Rücklesung → Sammel-YTYP → Ressource → Archiv
 ```
 
-Danach unter *Actions* den Lauf öffnen. Der Job **Pipeline (Linux, CWXML)**
-zeigt das vollständige Blender-Log; das gebaute Asset liegt als Artefakt
-`propforge-build-linux` daran.
+## Normaler Einstieg
 
-## Was bewusst Handarbeit bleibt
-
-- **UV-Layout.** Das Skript legt notfalls ein Smart-UV-Projekt an, damit der
-  Build nicht scheitert. Für verkaufsfertige Assets ist das kein Ersatz für ein
-  ordentliches Unwrap.
-- **Silhouette der LOD-Stufen.** Decimate ist blind. Bei Props mit dünnen
-  Strukturen (Geländer, Antennen) fallen niedrige LODs auseinander.
-- **Vertex-Painting.** Die Pipeline legt die vom Shader verlangten
-  Farb-Attribute an und setzt sie auf neutrales Weiß. Eine gestaltete
-  Bemalung (grün innen, rot außen) für weichere Beleuchtung bleibt Handarbeit.
-- **Eine gemeinsame ytyp direkt beim Bauen.** Jeder Prop bekommt zunächst
-  seine eigene Archetyp-Definition — das hält einen fehlgeschlagenen Prop
-  lokal. Für die Auslieferung fasst `merge-ytyp` sie zusammen; sie gleich
-  gemeinsam zu erzeugen, wäre einen Schritt kürzer.
-
-## Voraussetzungen
-
-- Python 3.11+, Pillow, numpy
-- Blender 4.2+ mit [Sollumz](https://github.com/Sollumz/Sollumz) 2.9-dev
-- **PyMateria** für `export_format = "NATIVE"` (direkter Binärexport, nur
-  Windows, wird von Sollumz über die Add-on-Preferences installiert). Ohne
-  PyMateria auf `export_format = "CWXML"` wechseln und mit CodeWalker konvertieren.
-- [texconv](https://github.com/microsoft/DirectXTex/releases) im PATH für den DDS-Schritt
-
-## Benutzung
-
-```bash
-python -m propforge.cli validate pipeline.toml   # Preflight, kein Blender nötig
-python -m propforge.cli textures pipeline.toml   # PBR -> DDS
-python -m propforge.cli build    pipeline.toml   # Blender headless
-python -m propforge.cli pack     pipeline.toml   # FiveM-Resource
-python -m propforge.cli run      pipeline.toml   # alles nacheinander
+```powershell
+python -m propforge.cli init
+python -m propforge.cli doctor --blender <blender.exe> --texconv <texconv.exe>
+python -m propforge.cli convert --pack pf_office_pack --no-ask
 ```
 
-Konfiguration: siehe `pipeline.toml`.
+Vorhandene Konfiguration erhalten und Werkzeugpfade einmalig hinterlegen.
+GLB und `<name>.job.json` liegen in `work/eingang/`. Erfolgreiche Eingaben
+wandern nach `work/fertig/`, die fertige Ressource liegt unter
+`work/ausgabe/resources/pf_office_pack/`. Ein weiterer `convert`-Aufruf mit
+neuen Eingaben erweitert denselben Pack. Für getrennte Packs `--root` verwenden.
+Der betreuende Workflow erzeugt Begleitdateien; Nutzer müssen keine
+`pipeline.toml` für einzelne Assets pflegen.
 
-Die Archetyp-Definition entsteht automatisch mit sinnvollen Vorgaben. Wer sie
-anpassen will:
+Geprüfter Eingangsvertrag: statisches opakes Prop, ein Materialatlas, reale
+Metermaße, finale LOD0, explizites Profil und Ursprung. Details und gültige
+Felder: [PIPELINE_CONTRACT.md](PIPELINE_CONTRACT.md). Weitere Metadaten gehören
+in die `asset.json` der Asset-Produktion, die der Konverter nicht liest.
 
-```toml
-[[prop]]
-name = "pf_desk"
-# ...
+## Dieses Update
 
-[prop.ytyp]
-enabled = true            # false: keine .ytyp erzeugen
-name = "pf_desk_ityp"     # Vorgabe: "<prop>_ityp"
-lod_dist = 500.0          # Vorgabe: die größte LOD-Sichtweite des Props
-hd_texture_dist = 100.0
-flags = 32                # 32 = "Static", der Normalfall für einen Prop
-# texture_dictionary = "" # Vorgabe: leer, weil die Texturen in der .ydr liegen
+- Vollständige Packs mit einer Sammel-YTYP entstehen im normalen `convert`.
+- Die native Freigabe liest echte YDR/YTD/YTYP zurück und prüft alle DDS-Mips,
+  Shader-Verweise, LOD-Vertexdaten, Kollision, Archetypen und Build-Belege.
+- Identische vollständige DDS-Dateien teilen Sampler-Namen und YTD-Einträge,
+  auch bei späteren Erweiterungen. Alte Texturquellen bleiben erhalten.
+- Schreibsperre, Arbeitskopie und Wiederherstellungsjournal schützen die
+  bisherige Ausgabe. Eingaben werden erst nach Veröffentlichung archiviert.
+- Kleine Meshes sowie erkannte dünne Teile und Bodenpunkte werden bei der
+  LOD-Erzeugung geschützt. Tatsächliche Reduktionen und Fallbacks sind sichtbar.
+- Der Diagnosehelfer platziert anhand der sichtbaren Standfläche und bietet
+  Bodenmessung, feste Kamera, GTA-Referenz und Betrachtungsabstände.
+
+## Texturen und Packs
+
+```powershell
+python -m propforge.cli convert --pack pf_office_pack --no-ask
+python -m propforge.cli convert --ytd pf_shared_textures --no-ask
+python -m propforge.cli convert --embed --no-ask
+python -m propforge.cli verify-native --root <workspace>
+python -m propforge.cli merge-ytyp <ordner> --name pf_combined
 ```
 
-## Lokale Routine
+`--pack` verwendet standardmäßig eine gleichnamige YTD. `--ytd` oder `--embed`
+überschreibt die Texturwahl für den Lauf. Ohne `--pack` bleibt der vorhandene
+Stapelweg mit individuellen YTYPs erhalten. Ohne `--no-ask` fragt die CLI im
+Terminal nach fehlenden Entscheidungen; vollständige Begleitdateien werden
+respektiert. Die tatsächlich vorhandenen Optionen stehen in `convert --help`.
 
-Kein Hantieren mit Konfigurationsdateien — der Ablauf läuft über Ordner:
+Der Shader `normal_spec.sps` verwendet Diffuse, Bump und Specular. DDS liegen
+vor dem Materialaufbau vor: BC1 für opakes Diffuse/Specular, BC3 für Normal,
+vollständige Mipkette. Die Specular-Ableitung ist eine Näherung, keine Zusage
+identischer PBR-Materialwirkung. Der Normal-Grünkanal wird genau einmal gedreht.
 
-```bash
-python -m propforge.cli init       # legt work/eingang, work/fertig, work/ausgabe an
-python -m propforge.cli batch      # fragt Assets ab und erzeugt sie in den Eingang
-python -m propforge.cli convert    # macht daraus .ydr, .ytyp und die Resource
+Im gemeinsamen Wörterbuch bestimmt der SHA256 der vollständigen DDS-Datei den
+Namen. Nur bytegleiche Inhalte werden zusammengefasst. Die Liste neben der YTD
+und alle referenzierten DDS müssen für Erweiterungen erhalten bleiben. Alte
+Builds ohne die neuen Belege werden aus ihren Quellen neu gebaut. Automatisches
+Entfernen unbenutzter Alt-Assets/Texturen ist noch nicht implementiert.
+
+## Werkzeuge und Ausgabe
+
+Geprüft: Windows, Blender 4.5.13 LTS, Sollumz-Commit
+`bfcfa9d022af7b9ba3581f295d7bb34163a559bc`, dessen szio 1.3.0.dev9/PyMateria 0.2.0
+und die mitgelieferte texconv-Version. Alle Pins und Hashes stehen in
+[TOOLCHAIN.md](TOOLCHAIN.md) und [toolchain.lock.json](toolchain.lock.json).
+Die CLI benötigt Python 3.11+, Pillow und numpy.
+
+Native GEN8-Ausgabe: YDRs mit eingebetteter BVH-Kollision, YTYP sowie optional
+gemeinsame YTDs. Die Ressource enthält `stream/`, `fxmanifest.lua`, `client.lua`
+und `PRUEFUNG.md`. Zusätzliche YBN oder automatische YMAP sind keine Pflicht
+und kein Merkmal dieses Ablaufs. CWXML bleibt eine eigene diagnostische Ausgabe
+ohne spielbare Ressource. CodeWalker kann kontrollieren, ist im nativen Weg
+kein zusätzlicher Pflicht-Konverter.
+
+## Testen
+
+```powershell
+python -m pip install -r requirements.txt
+python -m pytest tests -q
+python ci/pack_regression.py --blender <blender.exe> --root <neuer-testordner>
 ```
 
-`batch` fragt Zeile für Zeile: Prompt, Größenklasse, Kollisionsmaterial (mit
-Vorschlag aus dem Namen, `?` sucht). Leere Zeile beendet die Eingabe, dann
-läuft alles durch.
+Der Packtest verwendet Kopien des vorhandenen CI-Assets, baut zwei Läufe und
+erzeugt anschließend absichtlich einen Blender-Buildfehler. Er prüft, dass
+alte Props/Texturen erhalten bleiben und die veröffentlichte Ausgabe bei
+Fehlern bytegleich bleibt. **Echtes pytest** ist der Freigabeweg; der historische
+`tools/minipytest.py`-Ersatz deckt nicht alle aktuellen Fixture-Arten ab.
 
-`convert` fragt dasselbe für Meshes ohne Begleitdatei — im Skriptbetrieb
-(`--no-ask` oder ohne Terminal) wird stattdessen geschätzt und gesagt, was
-geschätzt wurde.
+Die CI pinnt Blender und Sollumz. Linux prüft CWXML, Windows den nativen Build
+einschließlich Pack-Erweiterung. Native Fehler lassen den Job scheitern.
+Lokale Resultate und Grenzen: [STATUS.md](STATUS.md).
 
-**Ohne Generator geht dasselbe:** GLBs einfach in `work/eingang` kopieren und
-`convert` aufrufen — der Schritt sieht keinen Unterschied. Wer will, legt
-neben ein Mesh eine Begleitdatei `name.job.json` mit Größenklasse und
-Material; fehlt sie, greifen die Vorgaben.
-
-Nach dem Umwandeln wandern die verarbeiteten Meshes nach `work/fertig`. **Was
-fehlschlägt, bleibt im Eingang liegen** und kommt beim nächsten Lauf wieder
-dran. In der `propforge.toml` steht einmalig der Blender-Pfad, damit
-`--blender` nicht jedes Mal nötig ist.
-
-## Texturen: eingebettet oder als gemeinsame .ytd
-
-`convert` fragt bei jedem neuen Prop, wohin die Texturen sollen:
-
-```
-  Texturen (e = eingebettet in die .ydr | Name = gemeinsame .ytd) [e]>
+```text
+/pfstage <propname>   Prop, GTA-Referenz, Bodenmessung und Kamera
+/pfmeasure           fünf Bodenabstände in Millimetern
+/pfview feet         niedrige Ansicht (oder Abstand in Metern)
+/pflods              acht Abstände um die Profilgrenzen
+/pfview off          normale Kamera wiederherstellen
+/pfdelete            eigene Testobjekte und Kamera entfernen
 ```
 
-Der Unterschied ist eine Speicherentscheidung, keine Geschmacksfrage.
-**Eingebettet** ist für einen einzelnen Prop das Robustere: eine Datei, nichts
-kann getrennt voneinander verloren gehen. Aber jede `.ydr` trägt ihre Texturen
-selbst — zehn Props mit derselben Holztextur laden sie zehnmal. Eine
-**gemeinsame `.ytd`** lädt sie einmal, und genau darum geht es bei einem Pack.
+`/pfspawn <name>` und `/pfreference` bleiben einzeln verfügbar. Die Diagnose
+unterstützt ebene Standflächen. Die ausgewählte interne LOD-Stufe ist nicht
+direkt messbar; der Bericht benennt diese Grenze ausdrücklich. Materialwirkung,
+Silhouette, begehbare Kollision und Streaming brauchen passende Spieltests.
+Eine Polygon-/Texturzahl ist keine FPS-Zusage.
 
-Für einen ganzen Stapel entscheidet man einmal statt zehnmal:
+## Weitere vorhandene Einstiege
 
-```bash
-python -m propforge.cli convert --ytd pack_props   # alle in ein Wörterbuch
-python -m propforge.cli convert --embed            # alle eingebettet
-```
+`validate`, `textures`, `jobs`, `build`, `verify`, `pack`, `run` arbeiten mit
+Konfigurationen wie `pipeline.toml`. `ingest` bereitet GLBs auf, `materials`
+liefert gültige Kollisionsmaterialien. Die vorhandenen `generate`-/`batch`-
+Einstiege zum Tripo-Anbieter bleiben erhalten; das Pack-Update nutzt sie nicht.
+Schlüssel bleiben in der ignorierten `.env` oder der Prozessumgebung.
 
-Der Name landet in der Begleitdatei (`"ytd": "pack_props"`), wird
-kleingeschrieben und entleerzeichnet — RAGE sucht Texturwörterbücher über
-einen Hash des kleingeschriebenen Namens, `Pack Props` lädt also nie, und zwar
-ohne Fehlermeldung. Beim Bauen entsteht daraus `work/ausgabe/build/_ytd/pack_props.ytd`,
-und der Archetyp bekommt `textureDictionary` gesetzt.
-
-**Ein Name, eine Datei.** Zehn Props mit demselben ytd-Namen ergeben *eine*
-`.ytd` mit allen dreißig Texturen — nicht zehn, die sich gegenseitig
-überschreiben. Die Gruppierung passiert vor dem Bauen; die `.ytd` entsteht in
-einem eigenen Durchgang am Ende, weil die Blender-Szene vor jedem Prop geleert
-wird und ein gemeinsames Wörterbuch darin gar nicht wachsen könnte.
-
-**Über mehrere Läufe hinweg auch.** Eine `.ytd` wird bei jedem Lauf komplett
-neu geschrieben. Wer heute fünf Props in `pack_props` baut und morgen fünf
-weitere, hätte morgen sonst ein Wörterbuch mit nur den neuen darin — Datei
-vorhanden, Größe plausibel, die fünf von gestern im Spiel weiß. Deshalb liegt
-neben der `.ytd` eine Liste `pack_props.textures.json` mit dem, was drinsteckt;
-der nächste Lauf schreibt sie fort. Sie ist kein zweiter Wahrheitsstand:
-gebaut wird aus den DDS auf der Platte, und was dort nicht mehr liegt, fällt
-mit einer Meldung raus.
-
-Geprüft wird an drei Stellen, weil ein falscher Verweis im Spiel keinen Fehler
-auslöst, sondern nur einen weißen Prop: die Blender-Stufe vergleicht den
-Archetyp-Wert gegen die tatsächlichen Materialnodes, liest die geschriebene
-`.ytd` zurück und zählt die Texturen nach; `verify` prüft, dass die `.ydr` die
-Texturen *nicht* mehr enthält, dass die `.ytd` existiert und dass sie eine
-Textur zu diesem Prop führt.
-
-## Mehrere ytyps zu einer zusammenfassen
-
-Ein Pack mit sechzig Props hat sechzig Archetyp-Dateien und sechzig Zeilen
-`DLC_ITYP_REQUEST` im Manifest — sechzig Gelegenheiten, eine zu vergessen.
-
-```bash
-python -m propforge.cli merge-ytyp work/ausgabe/build --name pack_props
-python -m propforge.cli merge-ytyp ordner --format CWXML --dry-run
-```
-
-Reines CWXML läuft ohne Blender; für binäre `.ytyp` (und für `--format NATIVE`)
-wird Blender gebraucht, weil dort szio steckt.
-
-**Bei Namensgleichheit bricht der Merger ab**, statt still zu entscheiden. Zwei
-Archetypen mit gleichem Namen sind kein Fehler, den irgendetwas meldet — das
-Spiel nimmt einen davon, und welchen, hängt an der Ladereihenfolge. Ein Prop
-zeigt dann im Spiel das Modell eines anderen. Sind die beiden Feld für Feld
-identisch (derselbe Prop zweimal gebaut), ist die Wahl folgenlos und einer
-wird übernommen.
-
-## Größenklassen
-
-Ein Prop ist nicht gleich ein Prop. Statt einer Zahl für alles gibt es vier
-Klassen, die Dreiecksbudget, Texturgröße und Sichtweiten setzen:
-
-| Profil | Dreiecke | Textur | Wofür |
-|---|---|---|---|
-| `clutter` | 1 500 | 256 px | Flasche, Dose, Becher, Werkzeug |
-| `standard` | 4 000 | 512 px | Kiste, Stuhl, Tisch, Tonne, Regal |
-| `detailed` | 10 000 | 1024 px | Automat, Maschine, Tür, Schild mit Text |
-| `hero` | 20 000 | 1024 px | Schaustück im Mittelpunkt |
-
-```toml
-[[prop]]
-profile = "clutter"
-```
-
-Die Texturgrößen folgen den FiveM-Optimierungsleitfäden (Kleinkram 256–512,
-lesbare Schilder 512–1024; eine `.ytd` ab etwa 16 MB gilt als zu groß), die
-Dreiecksbudgets den üblichen Polycount-Bändern für Spiel-Props — GTA V ist von
-2013 und liegt jeweils im unteren Teil. Die Sichtweiten sind Heuristik: was
-klein ist, muss nicht auf 500 m gerendert werden.
-
-Das Profil ist die **unterste Schicht** — alles, was in `[defaults]` oder am
-Prop ausdrücklich steht, gewinnt. `validate` warnt, wenn ein Prop sein Budget
-überschreitet, und schätzt den Texturspeicher mit.
-
-## Fertige Assets einlesen
-
-Der Generator ist optional. Ein vorhandenes Modell geht denselben Weg:
-
-```bash
-python -m propforge.cli ingest mein_modell.glb --name pf_tisch
-```
-
-Texturen werden entpackt und auf die Profilgröße begrenzt, die Größenklasse
-aus der Dreieckszahl geschätzt, das Kollisionsmaterial abgefragt, der
-`[[prop]]`-Block geschrieben.
-
-## Mesh erzeugen lassen
-
-**Schlüssel hinterlegen** — einer der drei Wege reicht:
-
-```
-1. Datei .env im Repo-Ordner:   TRIPO_API_KEY=tsk_...
-   (steht in der .gitignore — landet nicht im öffentlichen Repo)
-2. Windows, dauerhaft:          setx TRIPO_API_KEY "tsk_..."   → neues Terminal öffnen
-3. Nur für einen Aufruf:        --api-key tsk_...
-```
-
-```bash
-python -m propforge.cli generate "ein rustikaler Holztisch aus Eiche" --profile standard
-```
-
-Erzeugt das Mesh, lädt es herunter und reicht es direkt an `ingest` weiter —
-Texturen entpackt, Kollisionsmaterial abgefragt, `[[prop]]`-Block geschrieben.
-`--dry-run` zeigt ohne Schlüssel, was abgeschickt würde.
-
-**Modellwahl:** Vorgabe ist `P1-20260311` — schneller und günstiger, für
-Hintergrund- und Einrichtungs-Props ausreichend. `--model P2-20260801` bringt
-sauberere Texturen im Nahbereich und Quad-Topologie, kostet aber mehr Credits.
-Der tatsächliche Preis je Generierung steht im Tripo-Konto; nach dem ersten
-Lauf lohnt ein Blick auf den Kontostand.
-
-**Warum Tripo:** Pay-as-you-go ohne Abo (1 Credit = 1 US-Cent), kommerzielle
-Rechte hängen an der API-Nutzung ohne Namensnennung, und die Ausgabe ist GLB mit PBR-Texturen und einer
-Dreiecksobergrenze — genau das, was die Pipeline danach braucht. Bei Meshy
-braucht es für API und volles Eigentum den Pro-Plan; die kostenlose Stufe steht
-unter CC BY und verlangt Attribution im Endprodukt.
-
-Selbst hosten spart die laufenden Kosten, hat aber zwei Haken: **Hunyuan3D
-schließt die Europäische Union in seiner Lizenz ausdrücklich aus**
-(„excluding the territory of the European Union, United Kingdom and South
-Korea"), und TRELLIS.2 (MIT, kommerziell frei) kann nur Bild-zu-3D und will
-24 GB VRAM. Die Anbieterschnittstelle in `propforge/generate.py` ist deshalb
-bewusst schmal gehalten.
-
-## Kollisionsmaterial
-
-Das Material bestimmt Schrittgeräusche, Einschlagpartikel, Reifengrip und
-Bruchverhalten — ein Holztisch aus `CONCRETE` klingt falsch. Und es ist
-Pflicht: ohne Kollisionsmaterial verwirft der Export die Kollision.
-
-```bash
-python -m propforge.cli materials                    # alle 185, nach Verwendung gegliedert
-python -m propforge.cli materials holz               # suchen
-python -m propforge.cli materials --suggest pf_desk  # Vorschlag zu einem Namen
-```
-
-`propforge ingest` fragt beim Import danach und schlägt anhand des Namens etwas
-vor (`desk` → `WOOD_SOLID_MEDIUM`). Ohne Terminal — CI, Skript — wird nicht
-gefragt, sondern der Vorschlag genommen und gemeldet; `--material` setzt ihn
-direkt. Die vollständige Liste mit Verwendungszweck steht in
-[`docs/kollisionsmaterialien.txt`](docs/kollisionsmaterialien.txt), erzeugt aus
-`propforge/collision_materials.py`. Die CI gleicht sie bei jedem Lauf gegen
-Sollumz ab, damit Beschreibung und Wirklichkeit nicht auseinanderlaufen.
-
-## Test im Spiel
-
-Jede gepackte Resource bringt eine `client.lua` mit — nicht als Komfort,
-sondern als Diagnose:
-
-```
-/pfspawn            spawnt den ersten Prop
-/pfspawn pf_desk    spawnt einen bestimmten
-/pfdelete           räumt wieder auf
-```
-
-Der Befehl unterscheidet die beiden Fehlerbilder, die sich sonst gleich
-anfühlen:
-
-- **„konnte nicht geladen werden"** → das Spiel kennt den Archetyp nicht. Die
-  `.ytyp` ist das Problem, nicht das Modell.
-- **gespawnt, aber nichts zu sehen** → der Archetyp stimmt, die `.ydr` nicht.
-
-Abschaltbar über `spawn_helper = false` im `[pipeline]`-Abschnitt.
-
-## Tests
-
-```bash
-pytest tests/                              # normal
-python tools/minipytest.py tests/*.py      # ohne PyPI-Zugriff
-```
-
-367 Tests, grün. Sie decken die plattformunabhängigen Stufen ab —
-Texturmathematik, Validierung, GLB-Einlesen, Vorschau-Rasterizer, Packaging und
-die Auswertung exportierter CWXML-Assets inklusive der Archetyp-Definition.
-
-Die Blender-Stufe selbst ist **lokal nicht** automatisiert getestet: dafür
-braucht es eine Blender-Installation mit Sollumz. Genau die stellt die CI
-bereit — dort läuft sie bei jedem Push. Ihre API-Aufrufe sind gegen den
-Sollumz-Quellcode und dessen eigene Testsuite geprüft, nicht aus Tutorials
-abgeschrieben.
-
-## Warum diese Design-Entscheidungen
-
-**Specular aus Roughness.** AI-Generatoren liefern den metallic/roughness-Workflow,
-GTA V will eine einzelne Specular-Map mit umgekehrter Bedeutung. Die Umrechnung
-invertiert Roughness und hebt Metallflächen an — ohne diesen Schritt wirkt jedes
-Metall im Spiel wie Plastik.
-
-**Normalmap-Green-Flip.** Generatoren geben OpenGL-Konvention (Y+) aus, RAGE
-erwartet DirectX (Y-). Der Fehler äußert sich in Beleuchtung, die nach innen
-statt nach außen wölbt — und fällt oft erst spät auf.
-
-**Kollisionsmaterial ist Pflicht, nicht Kosmetik.** Sollumz verwirft beim
-Export jedes Bound-Mesh, das kein Kollisionsmaterial trägt — oder eines mit
-einem Nicht-Kollisionsmaterial. Beides trifft zu, wenn die Kollision als Kopie
-des Rendermeshes entsteht: sie bringt dessen Shadermaterial mit. Übrig bleibt
-ein Bound Composite ohne Kinder, eine gültige leere Hülle. Die Datei enthält
-einen Kollisionsblock, und man läuft trotzdem hindurch.
-
-**Kollisions-Preset beim Namen nennen.** Das eingebaute Standard-Preset heißt
-`General (Default)`, nicht `Default`. Sollumz sucht es nach Namen und ignoriert
-einen unbekannten stillschweigend — die Kollision hat dann Flags `0` und
-kollidiert mit nichts. Man läuft durch den Prop, ohne dass eine Datei fehlt.
-Die Pipeline wertet den Rückgabewert aus und prüft danach nach, ob wirklich
-Flags gesetzt sind.
-
-**UV-Maps und Farb-Attribute nach Sollumz-Konvention.** Sollumz sucht die
-Vertexdaten unter festen Namen — `UVMap 0`, `Color 1`. Heißt die UV-Map wie bei
-Blender üblich `UVMap`, überspringt der Vertexpuffer-Bauer sie stillschweigend,
-und die exportierte Geometrie hat kein `TexCoord0`, obwohl der Shader es
-deklariert. Sollumz warnt ins Log und exportiert trotzdem. Normalerweise
-erledigt das der Operator `sollumz.createshadermaterial`; wer wie diese
-Pipeline `create_shader` direkt aufruft, muss den Schritt selbst nachziehen.
-
-**Kollision aus einem niedrigen LOD.** `sollumz.converttodrawable` baut die
-eingebettete Kollision immer aus LOD0. Bei 10.000 Dreiecken sind das 10.000
-Kollisionsdreiecke, die die Physik nicht braucht. `retarget_collision` hängt sie
-nachträglich auf die konfigurierte Stufe um.
-
-**Logarithmisches Runden auf Zweierpotenzen.** 1500 px liegt näher an 2048
-(Faktor 1,37) als an 1024 (Faktor 1,46). Lineares Runden würde hier unnötig
-Detail wegwerfen.
-
-**Namenskollisionen als harter Fehler.** Streaming-Dateinamen sind in FiveM
-serverweit global. Eine Kollision überschreibt stillschweigend ein anderes Asset
-auf dem Server — das muss beim Packen auffallen, nicht im Betrieb.
-
-**Export-Settings als Operator-Argumente.** Sollumz' eigene Testsuite übergibt
-`target_formats` und `target_versions` zusammen mit `use_custom_settings=True`
-direkt an `sollumz.export_assets`, statt die Add-on-Preferences zu verändern.
-Das lässt die Einstellungen des Nutzers unangetastet und macht den Aufruf
-reproduzierbar.
+Der vollständige betreute Ablauf steht in
+[workflows/gta_conversion.md](workflows/gta_conversion.md). Mehrere Materialien,
+transparente Spezialshader, externe LOD-/Kollisionsquellen, ein eigener Box-
+Kollisionsbuild und andere Assetklassen sind damit nicht freigegeben.
